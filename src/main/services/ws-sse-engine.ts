@@ -71,20 +71,27 @@ export class WsSseEngine {
     this.activeWs.set(sessionId, session);
 
     ws.on('unexpected-response', (req, res) => {
+      if (session.pingTimer) clearInterval(session.pingTimer);
+      this.activeWs.delete(sessionId);
+
       let body = '';
-      res.on('data', (c) => (body += c));
-      res.on('end', () => {
-        if (session.pingTimer) clearInterval(session.pingTimer);
-        this.activeWs.delete(sessionId);
+      let emitted = false;
+
+      const triggerEmit = () => {
+        if (emitted) return;
+        emitted = true;
+        try {
+          req.destroy();
+        } catch {}
 
         const code = res.statusCode || 0;
         const msg = res.statusMessage || '';
         let hint = '';
 
         if (code === 403) {
-          hint = ' -> Cloudflare / Anti-Bot block: Character.AI requires session cookies. Please add your "Cookie" header (containing cf_clearance & sessionid) or "Authorization: Token <token>" from your browser session.';
+          hint = ' -> Cloudflare 403 Forbidden: Endpoint neo.character.ai menolak koneksi karena tidak ada header Cookie (cf_clearance, sessionid) atau Authorization (Token). Header ini TIDAK disertakan secara otomatis saat Copy as cURL dari Chrome DevTools.';
         } else if (code === 401) {
-          hint = ' -> Unauthorized: Character.AI session token is missing or expired.';
+          hint = ' -> Unauthorized: Token Character.AI tidak valid atau telah kedaluwarsa.';
         }
 
         emit({
@@ -100,6 +107,19 @@ export class WsSseEngine {
             body: body.slice(0, 1000),
           },
         });
+      };
+
+      // Failsafe timer: emit immediately within 400ms even if stream stays open
+      const timer = setTimeout(triggerEmit, 400);
+
+      res.on('data', (c) => (body += c));
+      res.on('end', () => {
+        clearTimeout(timer);
+        triggerEmit();
+      });
+      res.on('error', () => {
+        clearTimeout(timer);
+        triggerEmit();
       });
     });
 

@@ -162,40 +162,56 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
 
   // Connect / Disconnect Handler
   const handleToggleConnect = async () => {
-    if (isConnected) {
+    if (isConnected || tab.status === 'loading') {
       if ((window as any).networkAPI) {
         await (window as any).networkAPI.disconnectWs(tab.id);
       }
       updateTabState(tab.id, { status: 'idle' });
-    } else {
-      updateTabState(tab.id, { status: 'loading' });
-      try {
-        if ((window as any).networkAPI) {
-          const headersObj: Record<string, string> = {};
-          headers.forEach((h) => {
-            if (h.enabled && h.key.trim()) {
-              headersObj[h.key.trim()] = h.value;
-            }
-          });
+      return;
+    }
 
-          const subprotocols = subprotocolsInput
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
+    updateTabState(tab.id, { status: 'loading' });
+    try {
+      if ((window as any).networkAPI) {
+        const headersObj: Record<string, string> = {};
+        headers.forEach((h) => {
+          if (h.enabled && h.key.trim()) {
+            headersObj[h.key.trim()] = h.value;
+          }
+        });
 
-          await (window as any).networkAPI.connectWs({
-            sessionId: tab.id,
-            url,
-            headers: headersObj,
-            subprotocols: subprotocols.length ? subprotocols : undefined,
-            proxy: activeProxy?.enabled ? activeProxy : undefined,
-            heartbeatIntervalMs: heartbeat ? heartbeatInterval * 1000 : 0,
-          });
-          // Connection state will transition to 'connected' or 'error' reactively via stream:event
-        }
-      } catch (err: any) {
-        updateTabState(tab.id, { status: 'error' });
+        const subprotocols = subprotocolsInput
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        await (window as any).networkAPI.connectWs({
+          sessionId: tab.id,
+          url,
+          headers: headersObj,
+          subprotocols: subprotocols.length ? subprotocols : undefined,
+          proxy: activeProxy?.enabled ? activeProxy : undefined,
+          heartbeatIntervalMs: heartbeat ? heartbeatInterval * 1000 : 0,
+        });
+
+        // Failsafe timeout in case handshake hangs without event
+        setTimeout(() => {
+          const curTab = useAppStore.getState().tabs.find((t) => t.id === tab.id);
+          if (curTab && curTab.status === 'loading') {
+            updateTabState(tab.id, { status: 'error' });
+            useAppStore.getState().appendStreamEvent(tab.id, {
+              sessionId: tab.id,
+              protocol: 'WEBSOCKET',
+              direction: 'SYSTEM',
+              timestamp: Date.now(),
+              type: 'error',
+              payload: 'Handshake timeout: Server tidak merespon upgrade. Pastikan autentikasi Character.AI (Cookie/Authorization) sudah diisi.',
+            });
+          }
+        }, 8000);
       }
+    } catch (err: any) {
+      updateTabState(tab.id, { status: 'error' });
     }
   };
 

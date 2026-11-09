@@ -19,14 +19,14 @@ export const App: React.FC = () => {
   useEffect(() => {
     loadStorage();
 
-    // Register global stream event listener from Electron IPC
+    // Register global stream event listener from Electron IPC once on mount
     if ((window as any).networkAPI) {
       const unsubscribe = (window as any).networkAPI.onStreamEvent((event: any) => {
-        appendStreamEvent(event.sessionId, event);
+        useAppStore.getState().appendStreamEvent(event.sessionId, event);
       });
       return () => unsubscribe();
     }
-  }, [loadStorage, appendStreamEvent]);
+  }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
