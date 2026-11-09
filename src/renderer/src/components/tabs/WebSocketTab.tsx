@@ -77,6 +77,61 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const hasAuthHeader = headers.some(
     (h) => h.enabled && (h.key.toLowerCase() === 'cookie' || h.key.toLowerCase() === 'authorization')
   );
+  const hasMisplacedAuthCookies = headers.some(
+    (h) => h.enabled && (h.key.toUpperCase() === 'HTTP_AUTHORIZATION' || h.key.toUpperCase() === 'GCLB')
+  );
+
+  const fixAuthHeaders = () => {
+    const gclbHeader = headers.find((h) => h.key.toUpperCase() === 'GCLB');
+    const authCookieHeader = headers.find((h) => h.key.toUpperCase() === 'HTTP_AUTHORIZATION');
+
+    const gclbVal = gclbHeader ? gclbHeader.value.replace(/^"|"$/g, '') : '';
+    const authVal = authCookieHeader ? authCookieHeader.value.replace(/^"|"$/g, '') : '';
+
+    // Remove misplaced headers
+    const filtered = headers.filter(
+      (h) => h.key.toUpperCase() !== 'GCLB' && h.key.toUpperCase() !== 'HTTP_AUTHORIZATION'
+    );
+
+    // Build Cookie string
+    const cookieParts: string[] = [];
+    if (gclbVal) cookieParts.push(`GCLB="${gclbVal}"`);
+    if (authVal) cookieParts.push(`HTTP_AUTHORIZATION="${authVal}"`);
+
+    const existingCookieIdx = filtered.findIndex((h) => h.key.toLowerCase() === 'cookie');
+    if (existingCookieIdx >= 0) {
+      if (cookieParts.length) {
+        filtered[existingCookieIdx].value = filtered[existingCookieIdx].value
+          ? `${filtered[existingCookieIdx].value}; ${cookieParts.join('; ')}`
+          : cookieParts.join('; ');
+      }
+    } else if (cookieParts.length) {
+      filtered.unshift({
+        id: `h-cookie-${Date.now()}`,
+        key: 'Cookie',
+        value: cookieParts.join('; '),
+        enabled: true,
+      });
+    }
+
+    // Set standard Authorization header
+    if (authVal) {
+      const existingAuthIdx = filtered.findIndex((h) => h.key.toLowerCase() === 'authorization');
+      const cleanToken = authVal.replace(/^"|"$/g, '');
+      if (existingAuthIdx >= 0) {
+        filtered[existingAuthIdx].value = cleanToken;
+      } else {
+        filtered.unshift({
+          id: `h-auth-${Date.now()}`,
+          key: 'Authorization',
+          value: cleanToken,
+          enabled: true,
+        });
+      }
+    }
+
+    updateTabRequest(tab.id, { headers: filtered });
+  };
 
   // Synchronize URL with Tab Request
   useEffect(() => {
@@ -471,6 +526,25 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                   </div>
                 )}
 
+                {/* Detected Misplaced Cookie Headers (e.g. HTTP_AUTHORIZATION or GCLB entered as headers) */}
+                {hasMisplacedAuthCookies && (
+                  <div className="p-2.5 rounded bg-blue-950/40 border border-blue-500/50 text-blue-200 text-[11px] leading-relaxed flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <strong className="text-blue-300">Penyesuaian Format Otomatis Tersedia:</strong>
+                      <p className="mt-0.5 text-slate-300">
+                        Terdeteksi header <code>HTTP_AUTHORIZATION</code> atau <code>GCLB</code>. Di Character.AI, nilai tersebut adalah <strong>Cookie</strong> dan header <strong>Authorization</strong> resmi (bukan nama header terpisah).
+                      </p>
+                      <button
+                        onClick={fixAuthHeaders}
+                        className="mt-2 px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium text-[11px] cursor-pointer flex items-center gap-1.5 shadow"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" /> Perbaiki Format Otomatis Sekarang
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {headers.length === 0 ? (
                   <div className="text-center py-6 text-slate-500 border border-dashed border-slate-800 rounded">
                     No handshake headers configured.{' '}
@@ -683,6 +757,46 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
               </div>
 
               <div className="flex items-center gap-2">
+                {isCharacterAi && (
+                  <div className="flex items-center gap-1.5 text-[11px] mr-2">
+                    <span className="text-slate-500">Preset:</span>
+                    <button
+                      onClick={() => {
+                        setFormat('json');
+                        setMessageText(JSON.stringify({ command: 'ping' }, null, 2));
+                      }}
+                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] cursor-pointer"
+                    >
+                      ping
+                    </button>
+                    <button
+                      onClick={() => {
+                        setFormat('json');
+                        setMessageText(
+                          JSON.stringify(
+                            {
+                              command: 'update_primary_candidate',
+                              origin_id: 'web-next',
+                              payload: {
+                                candidate_id: 'chatcmpl-239ad3a789c9a219ce6abccf4ca766c1',
+                                chat_type: 'TYPE_ONE_ON_ONE',
+                                turn_key: {
+                                  chat_id: '932a6233-84fa-4000-8d4b-7da858144803',
+                                  turn_id: '79f916ad-3aa3-4eb1-9e53-b1f15e55ab28',
+                                },
+                              },
+                            },
+                            null,
+                            2
+                          )
+                        );
+                      }}
+                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] cursor-pointer"
+                    >
+                      update_candidate
+                    </button>
+                  </div>
+                )}
                 {format === 'json' && (
                   <button
                     onClick={formatJsonMessage}

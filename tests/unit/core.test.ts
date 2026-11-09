@@ -111,4 +111,15 @@ Sec-WebSocket-Protocol: graphql-ws, wamp`;
   const parsedRelative = parseRawHandshake(devToolsRaw);
   assert.equal(parsedRelative.url, 'wss://chat.example.com/ws/v2?token=abc');
   assert.deepEqual(parsedRelative.subprotocols, ['graphql-ws', 'wamp']);
+
+  // Test cURL copied directly from Chrome DevTools
+  const curlRaw = `curl 'https://neo.character.ai/ws/' \\
+    -H 'Origin: https://character.ai' \\
+    -H 'Cookie: GCLB="5f67a5315be3f898"; HTTP_AUTHORIZATION="Token c4d062e3eb831c81ca65fb60b7d4ef5c9f6c"' \\
+    -H 'Sec-WebSocket-Protocol: chat-protocol'`;
+  const parsedCurl = parseRawHandshake(curlRaw);
+  assert.equal(parsedCurl.url, 'wss://neo.character.ai/ws/');
+  assert.equal(parsedCurl.headers.length, 3);
+  assert.equal(parsedCurl.headers.find((h) => h.key === 'Cookie')?.value, 'GCLB="5f67a5315be3f898"; HTTP_AUTHORIZATION="Token c4d062e3eb831c81ca65fb60b7d4ef5c9f6c"');
+  assert.deepEqual(parsedCurl.subprotocols, ['chat-protocol']);
 });
