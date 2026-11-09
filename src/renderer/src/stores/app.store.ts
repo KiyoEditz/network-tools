@@ -130,8 +130,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((tab) => {
         if (tab.id !== sessionId) return tab;
+        let newStatus = tab.status;
+        if (event.type === 'error') {
+          newStatus = 'error';
+        } else if (event.type === 'status') {
+          if (event.payload === 'CONNECTED') newStatus = 'connected';
+          else if (typeof event.payload === 'string' && event.payload.startsWith('DISCONNECTED')) newStatus = 'idle';
+        }
         return {
           ...tab,
+          status: newStatus,
           streamEvents: [...tab.streamEvents, event],
         };
       }),

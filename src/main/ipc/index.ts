@@ -9,6 +9,7 @@ import { globalCookieJar } from '../services/cookie-jar.js';
 import { globalVirtualStorage } from '../services/virtual-storage.js';
 import { ProxyManager } from '../services/proxy-manager.js';
 import { NetworkInterfaceService } from '../services/network-interface.js';
+import { VariableEngine } from '../services/variable-engine.js';
 import { HttpRequestPayload, StreamEvent } from '../../shared/types.js';
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
@@ -43,7 +44,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // =================== WEBSOCKET ===================
   ipcMain.handle('ws:connect', async (_e, { sessionId, url, headers, subprotocols, proxy, heartbeatIntervalMs }) => {
-    await globalWsSseEngine.connectWs(sessionId, url, { headers, subprotocols, proxy, heartbeatIntervalMs }, emitStreamEvent);
+    const data = globalStorageService.getData();
+    const activeEnv = data.environments.find((env) => env.id === data.activeEnvironmentId);
+    const envVars = activeEnv ? activeEnv.variables : [];
+
+    const resolvedUrl = VariableEngine.resolve(url || '', { environment: envVars });
+    const resolvedHeaders: Record<string, string> = {};
+    if (headers && typeof headers === 'object') {
+      for (const [k, v] of Object.entries(headers)) {
+        resolvedHeaders[k] = VariableEngine.resolve(String(v), { environment: envVars });
+      }
+    }
+
+    await globalWsSseEngine.connectWs(sessionId, resolvedUrl, { headers: resolvedHeaders, subprotocols, proxy, heartbeatIntervalMs }, emitStreamEvent);
     return { success: true };
   });
 

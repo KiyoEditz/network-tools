@@ -44,8 +44,24 @@ export class WsSseEngine {
       headers['Cookie'] = cookieHeader;
     }
 
+    // Filter reserved hop-by-hop headers that ws manages itself to avoid protocol violation
+    const reservedHeaders = ['sec-websocket-key', 'sec-websocket-version', 'upgrade', 'connection'];
+    const cleanHeaders: Record<string, string> = {};
+    let origin: string | undefined;
+
+    for (const [k, v] of Object.entries(headers)) {
+      const lower = k.toLowerCase();
+      if (lower === 'origin') {
+        origin = v;
+        cleanHeaders[k] = v;
+      } else if (!reservedHeaders.includes(lower)) {
+        cleanHeaders[k] = v;
+      }
+    }
+
     const ws = new WebSocket(url, options.subprotocols, {
-      headers,
+      headers: cleanHeaders,
+      origin,
       agent,
       rejectUnauthorized: false,
     });
