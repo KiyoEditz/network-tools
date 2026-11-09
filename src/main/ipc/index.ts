@@ -43,7 +43,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // =================== WEBSOCKET ===================
-  ipcMain.handle('ws:connect', async (_e, { sessionId, url, headers, subprotocols, proxy, heartbeatIntervalMs }) => {
+  ipcMain.handle('ws:connect', async (_e, { sessionId, url, headers, subprotocols, proxy, heartbeatIntervalMs, tlsFingerprint }) => {
     const data = globalStorageService.getData();
     const activeEnv = data.environments.find((env) => env.id === data.activeEnvironmentId);
     const envVars = activeEnv ? activeEnv.variables : [];
@@ -56,7 +56,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
     }
 
-    await globalWsSseEngine.connectWs(sessionId, resolvedUrl, { headers: resolvedHeaders, subprotocols, proxy, heartbeatIntervalMs }, emitStreamEvent);
+    await globalWsSseEngine.connectWs(
+      sessionId,
+      resolvedUrl,
+      { headers: resolvedHeaders, subprotocols, proxy, heartbeatIntervalMs, tlsFingerprint },
+      emitStreamEvent
+    );
     return { success: true };
   });
 

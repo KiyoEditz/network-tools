@@ -56,6 +56,17 @@ export interface NetworkInterfaceConfig {
   localAddress?: string; // Bind specific local interface/IP
 }
 
+export interface TlsFingerprintConfig {
+  enabled: boolean;
+  preset: 'chrome' | 'firefox' | 'safari' | 'custom' | 'default';
+  ciphers?: string;
+  sigalgs?: string;
+  ecdhCurve?: string;
+  minVersion?: 'TLSv1.2' | 'TLSv1.3';
+  maxVersion?: 'TLSv1.2' | 'TLSv1.3';
+  rejectUnauthorized?: boolean;
+}
+
 export interface NetworkTiming {
   dnsLookupMs: number;
   tcpHandshakeMs: number;
@@ -87,6 +98,7 @@ export interface HttpRequestPayload {
   preRequestScript?: string;
   testScript?: string;
   rejectUnauthorized?: boolean;
+  tlsFingerprint?: TlsFingerprintConfig;
 }
 
 export interface HttpResponsePayload {

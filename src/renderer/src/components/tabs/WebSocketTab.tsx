@@ -24,6 +24,8 @@ import {
   X,
   RotateCcw,
   AlertCircle,
+  Shield,
+  Lock,
 } from 'lucide-react';
 
 interface WebSocketTabProps {
@@ -65,6 +67,13 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const [showRawModal, setShowRawModal] = useState(false);
   const [rawText, setRawText] = useState('');
   const [parsedPreview, setParsedPreview] = useState<{ url: string; headersCount: number } | null>(null);
+
+  // TLS Fingerprinting (JA3 / JA4 Mimic) state
+  const [tlsPreset, setTlsPreset] = useState<'chrome' | 'firefox' | 'safari' | 'custom' | 'default'>('chrome');
+  const [customCiphers, setCustomCiphers] = useState('');
+  const [customSigalgs, setCustomSigalgs] = useState('');
+  const [customCurves, setCustomCurves] = useState('X25519:P-256:P-384');
+  const [rejectUnauthorized, setRejectUnauthorized] = useState(false);
 
   const timelineEndRef = useRef<HTMLDivElement>(null);
   const isConnected = tab.status === 'connected';
@@ -192,6 +201,14 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
           subprotocols: subprotocols.length ? subprotocols : undefined,
           proxy: activeProxy?.enabled ? activeProxy : undefined,
           heartbeatIntervalMs: heartbeat ? heartbeatInterval * 1000 : 0,
+          tlsFingerprint: {
+            enabled: true,
+            preset: tlsPreset,
+            ciphers: customCiphers || undefined,
+            sigalgs: customSigalgs || undefined,
+            ecdhCurve: customCurves || undefined,
+            rejectUnauthorized,
+          },
         });
 
         // Failsafe timeout in case handshake hangs without event
@@ -475,6 +492,9 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
               >
                 <Sliders className="w-3 h-3" />
                 <span>Options</span>
+                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-cyan-950/80 text-cyan-400 border border-cyan-800/60 uppercase">
+                  TLS: {tlsPreset}
+                </span>
               </button>
             </div>
 
@@ -504,38 +524,21 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             {/* 1. HEADERS SUB-TAB */}
             {subTab === 'headers' && (
               <div className="space-y-2.5">
-                {/* Character.AI Cloudflare / Auth Warning Banner */}
-                {isCharacterAi && !hasAuthHeader && (
-                  <div className="p-2.5 rounded bg-amber-950/40 border border-amber-600/50 text-amber-200 text-[11px] leading-relaxed flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                {/* Character.AI Cloudflare / TLS Fingerprint Notice */}
+                {isCharacterAi && (
+                  <div className="p-2.5 rounded bg-sky-950/40 border border-sky-500/50 text-sky-200 text-[11px] leading-relaxed flex items-start gap-2">
+                    <Shield className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
                     <div className="flex-1">
-                      <strong className="text-amber-300">Autentikasi Diperlukan untuk Character.AI:</strong>
+                      <strong className="text-sky-300">Cloudflare Bot Management &amp; TLS Fingerprinting:</strong>
                       <p className="mt-0.5 text-slate-300">
-                        Endpoint <code>neo.character.ai</code> dilindungi oleh Cloudflare. Tanpa header{' '}
-                        <code className="text-amber-300">Cookie</code> (yang berisi <code>cf_clearance</code> &amp; session) atau{' '}
-                        <code className="text-amber-300">Authorization</code> dari browser Anda, koneksi akan ditolak dengan{' '}
-                        <strong>HTTP 403 Forbidden</strong>.
+                        Endpoint <code>neo.character.ai</code> memeriksa <strong>TLS Fingerprint (JA3 / JA4)</strong>. Engine Network Tester telah mengaktifkan profil TLS Mimic <strong>Chrome 120+</strong> (Ciphers &amp; Curves) secara otomatis.
                       </p>
                       <div className="mt-2 flex items-center gap-2">
                         <button
-                          onClick={() => {
-                            const list = [...headers];
-                            list.unshift({ id: `h-cookie-${Date.now()}`, key: 'Cookie', value: '', enabled: true });
-                            updateTabRequest(tab.id, { headers: list });
-                          }}
-                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[11px] cursor-pointer"
+                          onClick={() => setSubTab('options')}
+                          className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium text-[11px] cursor-pointer flex items-center gap-1 shadow"
                         >
-                          + Tambah Header Cookie
-                        </button>
-                        <button
-                          onClick={() => {
-                            const list = [...headers];
-                            list.unshift({ id: `h-auth-${Date.now()}`, key: 'Authorization', value: 'Token ', enabled: true });
-                            updateTabRequest(tab.id, { headers: list });
-                          }}
-                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-medium text-[11px] cursor-pointer border border-amber-500/30"
-                        >
-                          + Tambah Header Authorization
+                          <Sliders className="w-3.5 h-3.5" /> Atur TLS Fingerprint (JA3/JA4) di Options
                         </button>
                       </div>
                     </div>
@@ -695,6 +698,110 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             {/* 3. OPTIONS SUB-TAB */}
             {subTab === 'options' && (
               <div className="space-y-4">
+                {/* TLS Fingerprinting (JA3 / JA4 Mimic) */}
+                <div className="p-3 bg-slate-800/50 rounded border border-cyan-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Shield className="w-4 h-4 text-cyan-400" />
+                      <span className="font-semibold text-slate-200">TLS Fingerprinting (JA3 / JA4 Mimic)</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">
+                      Bypass Cloudflare / Akamai
+                    </span>
+                  </div>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Meniru tanda tangan TLS ClientHello browser resmi (Ciphers, Elliptic Curves, Signature Algorithms, TLS 1.3) agar tidak diblokir atau di-flag <code>403 Forbidden</code> oleh bot manager seperti Cloudflare.
+                  </p>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-300 font-medium block">Browser Profile Preset:</label>
+                    <select
+                      value={tlsPreset}
+                      disabled={isConnected}
+                      onChange={(e) => setTlsPreset(e.target.value as any)}
+                      className="w-full px-2.5 py-1.5 rounded bg-slate-900 border border-slate-700 font-sans text-xs text-slate-200 outline-none focus:border-cyan-500 cursor-pointer"
+                    >
+                      <option value="chrome">Google Chrome 120+ / Windows (JA3/JA4 Mimic) — Direkomendasikan</option>
+                      <option value="firefox">Mozilla Firefox 120+ (JA3/JA4 Mimic)</option>
+                      <option value="safari">Apple Safari 17+ (JA3/JA4 Mimic)</option>
+                      <option value="custom">Custom Cipher Suite &amp; Curves</option>
+                      <option value="default">Default Node.js TLS (OpenSSL Standard)</option>
+                    </select>
+                  </div>
+
+                  {/* Summary of Active Profile */}
+                  <div className="p-2.5 bg-slate-900/90 rounded border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1.5">
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>TLS Versions:</span>
+                      <span className="text-emerald-400 font-medium">TLSv1.2 ~ TLSv1.3</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>Curves:</span>
+                      <span className="text-cyan-300 font-medium">
+                        {tlsPreset === 'custom' ? customCurves : tlsPreset === 'firefox' ? 'X25519:P-256:P-384:P-521' : 'X25519:P-256:P-384'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>Ciphers:</span>
+                      <span className="text-amber-300 truncate max-w-[260px]" title={tlsPreset}>
+                        {tlsPreset === 'chrome' ? 'TLS_AES_128_GCM, CHACHA20, ECDHE-RSA/ECDSA' : tlsPreset}
+                      </span>
+                    </div>
+                  </div>
+
+                  {tlsPreset === 'custom' && (
+                    <div className="space-y-2 pt-2 border-t border-slate-700/50">
+                      <div>
+                        <label className="text-[11px] text-slate-300 font-medium block">Custom Ciphers (Colon-separated):</label>
+                        <input
+                          type="text"
+                          value={customCiphers}
+                          disabled={isConnected}
+                          placeholder="e.g. TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256"
+                          onChange={(e) => setCustomCiphers(e.target.value)}
+                          className="w-full mt-1 px-2.5 py-1.5 rounded bg-slate-900 border border-slate-700 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-slate-300 font-medium block">Custom Curves:</label>
+                        <input
+                          type="text"
+                          value={customCurves}
+                          disabled={isConnected}
+                          placeholder="e.g. X25519:P-256:P-384"
+                          onChange={(e) => setCustomCurves(e.target.value)}
+                          className="w-full mt-1 px-2.5 py-1.5 rounded bg-slate-900 border border-slate-700 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-[11px] text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={rejectUnauthorized}
+                        disabled={isConnected}
+                        onChange={(e) => setRejectUnauthorized(e.target.checked)}
+                        className="rounded bg-slate-800 border-slate-700 text-cyan-500"
+                      />
+                      <span>Strict Certificate Validation</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTlsPreset('chrome');
+                        setCustomCurves('X25519:P-256:P-384');
+                        setCustomCiphers('');
+                        setRejectUnauthorized(false);
+                      }}
+                      className="text-[10px] text-slate-400 hover:text-cyan-400 flex items-center gap-1 cursor-pointer transition"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Reset ke Chrome
+                    </button>
+                  </div>
+                </div>
+
                 {/* Heartbeat Configuration */}
                 <div className="p-3 bg-slate-800/50 rounded border border-slate-700/60 space-y-2">
                   <div className="font-semibold text-slate-200 flex items-center justify-between">

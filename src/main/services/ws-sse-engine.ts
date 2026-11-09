@@ -19,6 +19,90 @@ interface ActiveSseSession {
   req: http.ClientRequest;
 }
 
+export const TLS_PRESETS = {
+  chrome: {
+    name: 'Chrome 120+ / Windows (JA3/JA4)',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-AES128-SHA',
+      'ECDHE-RSA-AES256-SHA',
+      'AES128-GCM-SHA256',
+      'AES256-GCM-SHA384',
+      'AES128-SHA',
+      'AES256-SHA',
+    ].join(':'),
+    sigalgs: [
+      'ecdsa_secp256r1_sha256',
+      'rsa_pss_rsae_sha256',
+      'rsa_pkcs1_sha256',
+      'ecdsa_secp384r1_sha384',
+      'rsa_pss_rsae_sha384',
+      'rsa_pkcs1_sha384',
+      'rsa_pss_rsae_sha512',
+      'rsa_pkcs1_sha512',
+    ].join(':'),
+    ecdhCurve: 'X25519:P-256:P-384',
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3',
+  },
+  firefox: {
+    name: 'Firefox 120+ (JA3/JA4)',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-AES256-SHA',
+      'ECDHE-RSA-AES256-SHA',
+    ].join(':'),
+    sigalgs: [
+      'ecdsa_secp256r1_sha256',
+      'rsa_pss_rsae_sha256',
+      'rsa_pkcs1_sha256',
+      'ecdsa_secp384r1_sha384',
+      'rsa_pss_rsae_sha384',
+    ].join(':'),
+    ecdhCurve: 'X25519:P-256:P-384:P-521',
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3',
+  },
+  safari: {
+    name: 'Safari 17+ (JA3/JA4)',
+    ciphers: [
+      'TLS_AES_128_GCM_SHA256',
+      'TLS_AES_256_GCM_SHA384',
+      'TLS_CHACHA20_POLY1305_SHA256',
+      'ECDHE-ECDSA-AES256-GCM-SHA384',
+      'ECDHE-ECDSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-ECDSA-CHACHA20-POLY1305',
+      'ECDHE-RSA-CHACHA20-POLY1305',
+    ].join(':'),
+    sigalgs: [
+      'ecdsa_secp256r1_sha256',
+      'rsa_pss_rsae_sha256',
+      'rsa_pkcs1_sha256',
+    ].join(':'),
+    ecdhCurve: 'X25519:P-256:P-384',
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3',
+  },
+};
+
 export class WsSseEngine {
   private activeWs = new Map<string, ActiveWsSession>();
   private activeSse = new Map<string, ActiveSseSession>();
@@ -32,6 +116,16 @@ export class WsSseEngine {
       subprotocols?: string[];
       proxy?: any;
       heartbeatIntervalMs?: number;
+      tlsFingerprint?: {
+        enabled?: boolean;
+        preset?: 'chrome' | 'firefox' | 'safari' | 'custom' | 'default';
+        ciphers?: string;
+        sigalgs?: string;
+        ecdhCurve?: string;
+        minVersion?: string;
+        maxVersion?: string;
+        rejectUnauthorized?: boolean;
+      };
     },
     emit: StreamEventCallback
   ): Promise<void> {
@@ -59,12 +153,49 @@ export class WsSseEngine {
       }
     }
 
+    // Configure TLS Fingerprinting / JA3 Mimic
+    const tlsConfig = options.tlsFingerprint;
+    let ciphers: string | undefined;
+    let sigalgs: string | undefined;
+    let ecdhCurve: string | undefined;
+    let minVersion: any = 'TLSv1.2';
+    let maxVersion: any = 'TLSv1.3';
+
+    if (tlsConfig && tlsConfig.preset !== 'default') {
+      const presetKey = tlsConfig.preset || 'chrome';
+      if (presetKey !== 'custom' && (TLS_PRESETS as any)[presetKey]) {
+        const p = (TLS_PRESETS as any)[presetKey];
+        ciphers = p.ciphers;
+        sigalgs = p.sigalgs;
+        ecdhCurve = p.ecdhCurve;
+        minVersion = p.minVersion;
+        maxVersion = p.maxVersion;
+      } else if (presetKey === 'custom') {
+        ciphers = tlsConfig.ciphers;
+        sigalgs = tlsConfig.sigalgs;
+        ecdhCurve = tlsConfig.ecdhCurve;
+        minVersion = tlsConfig.minVersion || 'TLSv1.2';
+        maxVersion = tlsConfig.maxVersion || 'TLSv1.3';
+      }
+    } else {
+      // Default to Chrome TLS JA3/JA4 emulation so Cloudflare doesn't reject standard connections
+      const p = TLS_PRESETS.chrome;
+      ciphers = p.ciphers;
+      sigalgs = p.sigalgs;
+      ecdhCurve = p.ecdhCurve;
+    }
+
     const ws = new WebSocket(url, options.subprotocols, {
       headers: cleanHeaders,
       origin,
       agent,
-      rejectUnauthorized: false,
+      rejectUnauthorized: tlsConfig?.rejectUnauthorized !== undefined ? tlsConfig.rejectUnauthorized : false,
       handshakeTimeout: 15000,
+      ciphers,
+      sigalgs,
+      ecdhCurve,
+      minVersion,
+      maxVersion,
     });
 
     const session: ActiveWsSession = { ws };
