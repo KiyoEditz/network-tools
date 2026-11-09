@@ -23,6 +23,7 @@ import {
   HelpCircle,
   X,
   RotateCcw,
+  AlertCircle,
 } from 'lucide-react';
 
 interface WebSocketTabProps {
@@ -42,7 +43,8 @@ Sec-WebSocket-Version: 13
 Accept-Encoding: gzip, deflate, br, zstd
 Accept-Language: id,en-US;q=0.9,en;q=0.8,ja;q=0.7
 Sec-WebSocket-Key: QwkyrWhFzFVx0OrcoQNTHg==
-Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits`;
+Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+Cookie: cf_clearance=YOUR_CF_CLEARANCE_FROM_BROWSER; sessionid=YOUR_SESSIONID_FROM_BROWSER`;
 
 export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const { updateTabState, updateTabRequest, activeProxy } = useAppStore();
@@ -70,6 +72,11 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
 
   const headers = tab.request.headers || [];
   const queryParams = tab.request.queryParams || [];
+
+  const isCharacterAi = url.toLowerCase().includes('character.ai');
+  const hasAuthHeader = headers.some(
+    (h) => h.enabled && (h.key.toLowerCase() === 'cookie' || h.key.toLowerCase() === 'authorization')
+  );
 
   // Synchronize URL with Tab Request
   useEffect(() => {
@@ -129,7 +136,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             proxy: activeProxy?.enabled ? activeProxy : undefined,
             heartbeatIntervalMs: heartbeat ? heartbeatInterval * 1000 : 0,
           });
-          updateTabState(tab.id, { status: 'connected' });
+          // Connection state will transition to 'connected' or 'error' reactively via stream:event
         }
       } catch (err: any) {
         updateTabState(tab.id, { status: 'error' });
@@ -426,18 +433,43 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             {/* 1. HEADERS SUB-TAB */}
             {subTab === 'headers' && (
               <div className="space-y-2.5">
-                {/* Explanation Banner */}
-                <div className="p-2.5 rounded bg-slate-800/60 border border-slate-700/60 text-slate-300 text-[11px] leading-relaxed flex items-start gap-2">
-                  <Globe className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="font-semibold text-amber-300">WebSocket Handshake Headers:</span> Custom headers like{' '}
-                    <code className="text-amber-200 bg-slate-900 px-1 py-0.5 rounded">Origin</code>,{' '}
-                    <code className="text-amber-200 bg-slate-900 px-1 py-0.5 rounded">User-Agent</code>, and{' '}
-                    <code className="text-amber-200 bg-slate-900 px-1 py-0.5 rounded">Cookie</code> are sent during HTTP upgrade.
-                    Protocol nonce headers (<code className="text-slate-400">Sec-WebSocket-Key</code>,{' '}
-                    <code className="text-slate-400">Upgrade</code>) are automatically managed for RFC compliance.
+                {/* Character.AI Cloudflare / Auth Warning Banner */}
+                {isCharacterAi && !hasAuthHeader && (
+                  <div className="p-2.5 rounded bg-amber-950/40 border border-amber-600/50 text-amber-200 text-[11px] leading-relaxed flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <strong className="text-amber-300">Autentikasi Diperlukan untuk Character.AI:</strong>
+                      <p className="mt-0.5 text-slate-300">
+                        Endpoint <code>neo.character.ai</code> dilindungi oleh Cloudflare. Tanpa header{' '}
+                        <code className="text-amber-300">Cookie</code> (yang berisi <code>cf_clearance</code> &amp; session) atau{' '}
+                        <code className="text-amber-300">Authorization</code> dari browser Anda, koneksi akan ditolak dengan{' '}
+                        <strong>HTTP 403 Forbidden</strong>.
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            const list = [...headers];
+                            list.unshift({ id: `h-cookie-${Date.now()}`, key: 'Cookie', value: '', enabled: true });
+                            updateTabRequest(tab.id, { headers: list });
+                          }}
+                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[11px] cursor-pointer"
+                        >
+                          + Tambah Header Cookie
+                        </button>
+                        <button
+                          onClick={() => {
+                            const list = [...headers];
+                            list.unshift({ id: `h-auth-${Date.now()}`, key: 'Authorization', value: 'Token ', enabled: true });
+                            updateTabRequest(tab.id, { headers: list });
+                          }}
+                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-medium text-[11px] cursor-pointer border border-amber-500/30"
+                        >
+                          + Tambah Header Authorization
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {headers.length === 0 ? (
                   <div className="text-center py-6 text-slate-500 border border-dashed border-slate-800 rounded">

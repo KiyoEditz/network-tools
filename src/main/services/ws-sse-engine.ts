@@ -64,10 +64,44 @@ export class WsSseEngine {
       origin,
       agent,
       rejectUnauthorized: false,
+      handshakeTimeout: 15000,
     });
 
     const session: ActiveWsSession = { ws };
     this.activeWs.set(sessionId, session);
+
+    ws.on('unexpected-response', (req, res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => {
+        if (session.pingTimer) clearInterval(session.pingTimer);
+        this.activeWs.delete(sessionId);
+
+        const code = res.statusCode || 0;
+        const msg = res.statusMessage || '';
+        let hint = '';
+
+        if (code === 403) {
+          hint = ' -> Cloudflare / Anti-Bot block: Character.AI requires session cookies. Please add your "Cookie" header (containing cf_clearance & sessionid) or "Authorization: Token <token>" from your browser session.';
+        } else if (code === 401) {
+          hint = ' -> Unauthorized: Character.AI session token is missing or expired.';
+        }
+
+        emit({
+          sessionId,
+          protocol: 'WEBSOCKET',
+          direction: 'SYSTEM',
+          timestamp: Date.now(),
+          type: 'error',
+          payload: `Handshake Failed: HTTP ${code} ${msg}${hint}`,
+          metadata: {
+            statusCode: code,
+            headers: res.headers,
+            body: body.slice(0, 1000),
+          },
+        });
+      });
+    });
 
     ws.on('open', () => {
       emit({
