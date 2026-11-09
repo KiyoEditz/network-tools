@@ -34,7 +34,33 @@ export interface MockServersHandle {
   stop: () => Promise<void>;
 }
 
+function checkMockRunning(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get('http://127.0.0.1:9080/api/users', (res) => {
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(400, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
 export async function startMockServers(): Promise<MockServersHandle> {
+  if (await checkMockRunning()) {
+    return {
+      httpServer: null as any,
+      wsServer: null as any,
+      sseServer: null as any,
+      tcpServer: null as any,
+      udpServer: null as any,
+      mqttTcpServer: null as any,
+      signalingWs: null as any,
+      stop: async () => {},
+    };
+  }
+
   // 1. HTTP Server (Port 9080)
   const httpServer = http.createServer((req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
