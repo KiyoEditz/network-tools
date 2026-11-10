@@ -1,8 +1,10 @@
 // src/renderer/src/components/tabs/WebSocketTab.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TabItem, useAppStore } from '../../stores/app.store.js';
 import { KeyValuePair } from '../../../../shared/types.js';
 import { parseRawHandshake } from '../../../../shared/raw-handshake-parser.js';
+import { CharacterAiTurnForm } from './cai/CharacterAiTurnForm.js';
+import { CharacterAiChatView } from './cai/CharacterAiChatView.js';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -29,6 +31,9 @@ import {
   Cookie as CookieIcon,
   FolderOpen,
   Cpu,
+  MessageSquare,
+  Bot,
+  User,
 } from 'lucide-react';
 
 interface WebSocketTabProps {
@@ -93,6 +98,16 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const queryParams = tab.request.queryParams || [];
 
   const isCharacterAi = (url || '').toLowerCase().includes('character.ai');
+  const [composeMode, setComposeMode] = useState<'form' | 'raw'>(isCharacterAi ? 'form' : 'raw');
+  const [timelineViewMode, setTimelineViewMode] = useState<'chat' | 'raw'>(isCharacterAi ? 'chat' : 'raw');
+  const [collapseStreamingChunks, setCollapseStreamingChunks] = useState(true);
+
+  useEffect(() => {
+    if (isCharacterAi) {
+      setComposeMode('form');
+      setTimelineViewMode('chat');
+    }
+  }, [isCharacterAi]);
   const hasAuthHeader = headers.some(
     (h) => h.enabled && ((h.key || '').toLowerCase() === 'cookie' || (h.key || '').toLowerCase() === 'authorization')
   );
@@ -541,6 +556,37 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
     }
   };
 
+  const handleSendRawString = async (text: string) => {
+    if (!isConnected || !text.trim()) return;
+    try {
+      if (wsEngine === 'chromium' && nativeWsRef.current?.readyState === WebSocket.OPEN) {
+        nativeWsRef.current.send(text);
+        useAppStore.getState().appendStreamEvent(tab.id, {
+          sessionId: tab.id,
+          protocol: 'WEBSOCKET',
+          direction: 'OUT',
+          type: 'message',
+          timestamp: Date.now(),
+          payload: text,
+        });
+      } else if ((window as any).networkAPI) {
+        await (window as any).networkAPI.sendWs({
+          sessionId: tab.id,
+          payload: text,
+          format: 'json',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to send raw WebSocket message:', err);
+    }
+  };
+
+  const handleLoadJsonToEditor = (jsonStr: string) => {
+    setMessageText(jsonStr);
+    setFormat('json');
+    setComposeMode('raw');
+  };
+
   const handleClearMessages = () => {
     updateTabState(tab.id, { streamEvents: [] });
   };
@@ -669,6 +715,40 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
     }
     return true;
   });
+
+  // Display events for Raw Timeline (with optional streaming chunk collapse)
+  const displayRawEvents = useMemo(() => {
+    if (!collapseStreamingChunks) return filteredEvents;
+
+    const seenTurnIds = new Set<string>();
+    const result: typeof filteredEvents = [];
+
+    for (let i = filteredEvents.length - 1; i >= 0; i--) {
+      const ev = filteredEvents[i];
+      let turnId: string | null = null;
+      if (typeof ev.payload === 'object' && ev.payload !== null) {
+        if (ev.payload.command === 'update_turn' && ev.payload.turn?.turn_key?.turn_id) {
+          turnId = ev.payload.turn.turn_key.turn_id;
+        }
+      } else if (typeof ev.payload === 'string' && ev.payload.includes('"update_turn"')) {
+        try {
+          const parsed = JSON.parse(ev.payload);
+          if (parsed.command === 'update_turn' && parsed.turn?.turn_key?.turn_id) {
+            turnId = parsed.turn.turn_key.turn_id;
+          }
+        } catch {}
+      }
+
+      if (turnId) {
+        if (seenTurnIds.has(turnId)) {
+          continue; // Skip earlier partial chunk
+        }
+        seenTurnIds.add(turnId);
+      }
+      result.unshift(ev);
+    }
+    return result;
+  }, [filteredEvents, collapseStreamingChunks]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-900 overflow-hidden text-xs select-none">
@@ -1269,93 +1349,143 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
 
           {/* ================= BOTTOM COMPOSER ================= */}
           <div className="p-3 bg-slate-900 border-t border-slate-800 flex flex-col gap-2">
-            <div className="flex items-center justify-between text-slate-400">
-              <div className="flex items-center gap-3">
-                <span className="font-medium text-slate-300">Compose Frame:</span>
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="radio" checked={format === 'json'} onChange={() => setFormat('json')} /> JSON
-                </label>
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="radio" checked={format === 'text'} onChange={() => setFormat('text')} /> Text
-                </label>
-                <label className="flex items-center gap-1 cursor-pointer">
-                  <input type="radio" checked={format === 'hex'} onChange={() => setFormat('hex')} /> Hex
-                </label>
-              </div>
-
-              <div className="flex items-center gap-2">
+            {/* Mode Switcher Tabs */}
+            <div className="flex items-center justify-between pb-1 border-b border-slate-800">
+              <div className="flex items-center gap-1 text-xs">
                 {isCharacterAi && (
-                  <div className="flex items-center gap-1.5 text-[11px] mr-2">
-                    <span className="text-slate-500">Preset:</span>
-                    <button
-                      onClick={() => {
-                        setFormat('json');
-                        setMessageText(JSON.stringify({ command: 'ping' }, null, 2));
-                      }}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] cursor-pointer"
-                    >
-                      ping
-                    </button>
-                    <button
-                      onClick={() => {
-                        setFormat('json');
-                        setMessageText(
-                          JSON.stringify(
-                            {
-                              command: 'update_primary_candidate',
-                              origin_id: 'web-next',
-                              payload: {
-                                candidate_id: 'chatcmpl-239ad3a789c9a219ce6abccf4ca766c1',
-                                chat_type: 'TYPE_ONE_ON_ONE',
-                                turn_key: {
-                                  chat_id: '932a6233-84fa-4000-8d4b-7da858144803',
-                                  turn_id: '79f916ad-3aa3-4eb1-9e53-b1f15e55ab28',
-                                },
-                              },
-                            },
-                            null,
-                            2
-                          )
-                        );
-                      }}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] cursor-pointer"
-                    >
-                      update_candidate
-                    </button>
-                  </div>
-                )}
-                {format === 'json' && (
                   <button
-                    onClick={formatJsonMessage}
-                    className="text-indigo-400 hover:text-indigo-300 transition text-[11px] cursor-pointer"
+                    type="button"
+                    onClick={() => setComposeMode('form')}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-t transition font-medium cursor-pointer ${
+                      composeMode === 'form'
+                        ? 'bg-slate-800 text-indigo-300 border-b-2 border-indigo-500 shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
                   >
-                    Format JSON
+                    <Bot className="w-3.5 h-3.5 text-violet-400" />
+                    <span>Character.AI Chat Form</span>
                   </button>
                 )}
                 <button
-                  onClick={handleSendMessage}
-                  disabled={!isConnected}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-40 cursor-pointer shadow"
-                  title="Send WebSocket Message (Ctrl + Enter)"
+                  type="button"
+                  onClick={() => setComposeMode('raw')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-t transition font-medium cursor-pointer ${
+                    composeMode === 'raw'
+                      ? 'bg-slate-800 text-indigo-300 border-b-2 border-indigo-500 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
                 >
-                  <Send className="w-3 h-3" /> Send Frame
+                  <FileCode className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Raw Frame Editor</span>
                 </button>
               </div>
+
+              {composeMode === 'form' && (
+                <span className="text-[10px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" /> Auto Request-ID & UUIDs
+                </span>
+              )}
             </div>
 
-            <textarea
-              rows={4}
-              value={messageText}
-              onChange={(e) => setMessageText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.ctrlKey && e.key === 'Enter') {
-                  e.preventDefault();
-                  handleSendMessage();
-                }
-              }}
-              placeholder="Enter JSON, text, or hex string to transmit..."
-              className="w-full p-2.5 rounded bg-slate-800/90 border border-slate-700/80 font-mono text-xs text-slate-100 outline-none focus:border-indigo-500 leading-relaxed resize-none"
-            />
+            {composeMode === 'form' && isCharacterAi ? (
+              <CharacterAiTurnForm
+                tab={tab}
+                isConnected={isConnected}
+                onSendRawPayload={handleSendRawString}
+                onLoadJsonToEditor={handleLoadJsonToEditor}
+              />
+            ) : (
+              // Raw Frame Editor
+              <>
+                <div className="flex items-center justify-between text-slate-400">
+                  <div className="flex items-center gap-3">
+                    <span className="font-medium text-slate-300">Compose Frame:</span>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="radio" checked={format === 'json'} onChange={() => setFormat('json')} /> JSON
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="radio" checked={format === 'text'} onChange={() => setFormat('text')} /> Text
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="radio" checked={format === 'hex'} onChange={() => setFormat('hex')} /> Hex
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {isCharacterAi && (
+                      <div className="flex items-center gap-1.5 text-[11px] mr-2">
+                        <span className="text-slate-500">Preset:</span>
+                        <button
+                          onClick={() => {
+                            setFormat('json');
+                            setMessageText(JSON.stringify({ command: 'ping' }, null, 2));
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] cursor-pointer"
+                        >
+                          ping
+                        </button>
+                        <button
+                          onClick={() => {
+                            setFormat('json');
+                            setMessageText(
+                              JSON.stringify(
+                                {
+                                  command: 'update_primary_candidate',
+                                  origin_id: 'web-next',
+                                  payload: {
+                                    candidate_id: 'chatcmpl-239ad3a789c9a219ce6abccf4ca766c1',
+                                    chat_type: 'TYPE_ONE_ON_ONE',
+                                    turn_key: {
+                                      chat_id: '932a6233-84fa-4000-8d4b-7da858144803',
+                                      turn_id: '79f916ad-3aa3-4eb1-9e53-b1f15e55ab28',
+                                    },
+                                  },
+                                },
+                                null,
+                                2
+                              )
+                            );
+                          }}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[10px] cursor-pointer"
+                        >
+                          update_candidate
+                        </button>
+                      </div>
+                    )}
+                    {format === 'json' && (
+                      <button
+                        onClick={formatJsonMessage}
+                        className="text-indigo-400 hover:text-indigo-300 transition text-[11px] cursor-pointer"
+                      >
+                        Format JSON
+                      </button>
+                    )}
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!isConnected}
+                      className="flex items-center gap-1.5 px-4 py-1.5 rounded font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-40 cursor-pointer shadow"
+                      title="Send WebSocket Message (Ctrl + Enter)"
+                    >
+                      <Send className="w-3 h-3" /> Send Frame
+                    </button>
+                  </div>
+                </div>
+
+                <textarea
+                  rows={4}
+                  value={messageText}
+                  onChange={(e) => setMessageText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.ctrlKey && e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  placeholder="Enter JSON, text, or hex string to transmit..."
+                  className="w-full p-2.5 rounded bg-slate-800/90 border border-slate-700/80 font-mono text-xs text-slate-100 outline-none focus:border-indigo-500 leading-relaxed resize-none"
+                />
+              </>
+            )}
           </div>
         </div>
 
@@ -1363,19 +1493,41 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
         <div className="w-1/2 flex flex-col bg-slate-950/70 overflow-hidden">
           {/* Timeline Toolbar */}
           <div className="p-2.5 bg-slate-800/50 border-b border-slate-800 flex items-center justify-between gap-2">
-            {/* Status & Filters */}
-            <div className="flex items-center gap-1.5">
-              <Radio
-                className={`w-3.5 h-3.5 ${
-                  isConnected ? 'text-emerald-400 animate-pulse' : 'text-slate-500'
+            {/* View Mode Switcher */}
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-700/80 rounded p-0.5 text-xs">
+              {isCharacterAi && (
+                <button
+                  type="button"
+                  onClick={() => setTimelineViewMode('chat')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded transition font-medium cursor-pointer ${
+                    timelineViewMode === 'chat'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Tampilan Chat Interaktif Streaming (Teks Bersih Mudah Dibaca)"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 text-violet-300" />
+                  <span>Chat Stream View</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setTimelineViewMode('raw')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded transition font-medium cursor-pointer ${
+                  timelineViewMode === 'raw'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
                 }`}
-              />
-              <span className="font-medium text-slate-300">
-                Timeline ({filteredEvents.length})
-              </span>
+                title="Tampilan Frame WebSocket Mentah (Semua Paket)"
+              >
+                <Radio className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Raw Frames ({filteredEvents.length})</span>
+              </button>
+            </div>
 
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1 ml-2 text-[11px]">
+            {/* If in raw timeline, show filters */}
+            {timelineViewMode === 'raw' && (
+              <div className="flex items-center gap-1 text-[11px] ml-1">
                 {(['all', 'in', 'out', 'ping', 'system'] as const).map((filter) => (
                   <button
                     key={filter}
@@ -1390,126 +1542,206 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                   </button>
                 ))}
               </div>
-            </div>
+            )}
 
-            {/* Actions: Search, AutoScroll, Clear */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center bg-slate-800 border border-slate-700/80 rounded px-2 py-0.5">
-                <Search className="w-3 h-3 text-slate-400 mr-1" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filter payload..."
-                  className="bg-transparent text-slate-200 text-[11px] outline-none w-24 sm:w-28"
-                />
-              </div>
+            {/* Actions: Collapse, Search, Clear */}
+            <div className="flex items-center gap-2 ml-auto">
+              {timelineViewMode === 'raw' && isCharacterAi && (
+                <label
+                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer select-none"
+                  title="Gabungkan streaming chunks untuk turn yang sama menjadi 1 item"
+                >
+                  <input
+                    type="checkbox"
+                    checked={collapseStreamingChunks}
+                    onChange={(e) => setCollapseStreamingChunks(e.target.checked)}
+                    className="rounded border-slate-700 text-indigo-600"
+                  />
+                  <span>Collapse Streams</span>
+                </label>
+              )}
+
+              {timelineViewMode === 'raw' && (
+                <div className="flex items-center bg-slate-800 border border-slate-700/80 rounded px-2 py-0.5">
+                  <Search className="w-3 h-3 text-slate-400 mr-1" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Filter..."
+                    className="bg-transparent text-slate-200 text-[11px] outline-none w-20 sm:w-24"
+                  />
+                </div>
+              )}
 
               <button
                 onClick={handleClearMessages}
                 className="flex items-center gap-1 text-slate-400 hover:text-rose-400 transition cursor-pointer p-1"
-                title="Clear Timeline"
+                title="Bersihkan Timeline"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
 
-          {/* Stream Messages Container */}
-          <div
-            ref={timelineEndRef}
-            className="flex-1 overflow-auto p-3 space-y-2 font-mono text-xs select-text"
-          >
-            {filteredEvents.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-2">
-                <Radio className="w-8 h-8 opacity-30" />
-                <p>No WebSocket frames recorded.</p>
-                <p className="text-[11px] text-slate-600">
-                  Connect to a WebSocket server and send messages to inspect frames.
-                </p>
-              </div>
-            ) : (
-              filteredEvents.map((ev, idx) => {
-                const isOut = ev.direction === 'OUT';
-                const isIn = ev.direction === 'IN';
-                const isPingPong = ev.type === 'ping' || ev.type === 'pong';
-                const isError = ev.type === 'error';
+          {/* Right Pane Body */}
+          {timelineViewMode === 'chat' && isCharacterAi ? (
+            <CharacterAiChatView events={tab.streamEvents || []} autoScroll={autoScroll} />
+          ) : (
+            // Raw Frames Timeline
+            <div
+              ref={timelineEndRef}
+              className="flex-1 overflow-auto p-3 space-y-2 font-mono text-xs select-text"
+            >
+              {displayRawEvents.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-2">
+                  <Radio className="w-8 h-8 opacity-30" />
+                  <p>No WebSocket frames recorded.</p>
+                  <p className="text-[11px] text-slate-600">
+                    Connect to a WebSocket server and send messages to inspect frames.
+                  </p>
+                </div>
+              ) : (
+                displayRawEvents.map((ev, idx) => {
+                  const isOut = ev.direction === 'OUT';
+                  const isIn = ev.direction === 'IN';
+                  const isPingPong = ev.type === 'ping' || ev.type === 'pong';
+                  const isError = ev.type === 'error';
 
-                const payloadText =
-                  typeof ev.payload === 'object'
-                    ? JSON.stringify(ev.payload, null, 2)
-                    : String(ev.payload);
+                  // Try to parse JSON and detect CAI update_turn
+                  let caiSummary: { authorName: string; isFinal: boolean; rawContent: string; modelType?: string } | null = null;
+                  let payloadText = '';
 
-                return (
-                  <div
-                    key={idx}
-                    className={`p-2.5 rounded border transition ${
-                      isOut
-                        ? 'bg-emerald-950/25 border-emerald-800/40 text-emerald-200'
-                        : isIn
-                        ? 'bg-blue-950/25 border-blue-800/40 text-blue-200'
-                        : isPingPong
-                        ? 'bg-amber-950/25 border-amber-800/40 text-amber-200'
-                        : isError
-                        ? 'bg-rose-950/30 border-rose-800/50 text-rose-200'
-                        : 'bg-slate-800/40 border-slate-700/50 text-slate-300'
-                    }`}
-                  >
-                    {/* Header Row */}
-                    <div className="flex items-center justify-between text-[11px] opacity-80 mb-1 border-b border-white/5 pb-1">
-                      <span className="flex items-center gap-1.5 font-semibold">
-                        {isOut ? (
-                          <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : isIn ? (
-                          <ArrowDownLeft className="w-3.5 h-3.5 text-blue-400" />
-                        ) : (
-                          <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                        )}
-                        <span>{ev.direction}</span>
-                        <span className="text-[10px] px-1 py-0.2 rounded bg-black/30 font-normal">
-                          {(ev.type || ev.direction || 'EVENT').toUpperCase()}
-                        </span>
-                        {ev.sizeBytes ? (
-                          <span className="text-[10px] text-slate-400">{ev.sizeBytes} B</span>
-                        ) : null}
-                      </span>
+                  if (typeof ev.payload === 'object' && ev.payload !== null) {
+                    payloadText = JSON.stringify(ev.payload, null, 2);
+                    if (ev.payload.command === 'update_turn' && ev.payload.turn) {
+                      const cand = ev.payload.turn.candidates?.[0];
+                      caiSummary = {
+                        authorName: ev.payload.turn.author?.name || 'Character',
+                        isFinal: Boolean(cand?.is_final),
+                        rawContent: cand?.raw_content || '',
+                        modelType: cand?.model_type,
+                      };
+                    }
+                  } else if (typeof ev.payload === 'string') {
+                    if (ev.payload.trim().startsWith('{') || ev.payload.trim().startsWith('[')) {
+                      try {
+                        const parsed = JSON.parse(ev.payload);
+                        payloadText = JSON.stringify(parsed, null, 2);
+                        if (parsed.command === 'update_turn' && parsed.turn) {
+                          const cand = parsed.turn.candidates?.[0];
+                          caiSummary = {
+                            authorName: parsed.turn.author?.name || 'Character',
+                            isFinal: Boolean(cand?.is_final),
+                            rawContent: cand?.raw_content || '',
+                            modelType: cand?.model_type,
+                          };
+                        }
+                      } catch {
+                        payloadText = ev.payload;
+                      }
+                    } else {
+                      payloadText = ev.payload;
+                    }
+                  } else {
+                    payloadText = String(ev.payload || '');
+                  }
 
-                      <div className="flex items-center gap-2">
-                        <span>
-                          {new Date(ev.timestamp).toLocaleTimeString()}.
-                          {String(ev.timestamp % 1000).padStart(3, '0')}
-                        </span>
-                        <button
-                          onClick={() => copyToClipboard(payloadText, `copy-${idx}`)}
-                          className="hover:text-white transition p-0.5 cursor-pointer"
-                          title="Copy payload"
-                        >
-                          {copiedId === `copy-${idx}` ? (
-                            <Check className="w-3 h-3 text-emerald-400" />
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-2.5 rounded border transition ${
+                        isOut
+                          ? 'bg-emerald-950/25 border-emerald-800/40 text-emerald-200'
+                          : isIn
+                          ? 'bg-blue-950/25 border-blue-800/40 text-blue-200'
+                          : isPingPong
+                          ? 'bg-amber-950/25 border-amber-800/40 text-amber-200'
+                          : isError
+                          ? 'bg-rose-950/30 border-rose-800/50 text-rose-200'
+                          : 'bg-slate-800/40 border-slate-700/50 text-slate-300'
+                      }`}
+                    >
+                      {/* Header Row */}
+                      <div className="flex items-center justify-between text-[11px] opacity-80 mb-1 border-b border-white/5 pb-1">
+                        <span className="flex items-center gap-1.5 font-semibold">
+                          {isOut ? (
+                            <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : isIn ? (
+                            <ArrowDownLeft className="w-3.5 h-3.5 text-blue-400" />
                           ) : (
-                            <Copy className="w-3 h-3 text-slate-400" />
+                            <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
                           )}
-                        </button>
+                          <span>{ev.direction}</span>
+                          <span className="text-[10px] px-1 py-0.2 rounded bg-black/30 font-normal">
+                            {(ev.type || ev.direction || 'EVENT').toUpperCase()}
+                          </span>
+                          {ev.sizeBytes ? (
+                            <span className="text-[10px] text-slate-400">{ev.sizeBytes} B</span>
+                          ) : null}
+                        </span>
+
+                        <div className="flex items-center gap-2">
+                          <span>
+                            {new Date(ev.timestamp).toLocaleTimeString()}.
+                            {String(ev.timestamp % 1000).padStart(3, '0')}
+                          </span>
+                          <button
+                            onClick={() => copyToClipboard(payloadText, `copy-${idx}`)}
+                            className="hover:text-white transition p-0.5 cursor-pointer"
+                            title="Copy payload"
+                          >
+                            {copiedId === `copy-${idx}` ? (
+                              <Check className="w-3 h-3 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3 h-3 text-slate-400" />
+                            )}
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Character.AI Summary Highlight if available */}
+                      {caiSummary && (
+                        <div className="mb-2 p-2 rounded bg-violet-950/40 border border-violet-800/50 text-xs font-sans">
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-violet-200 mb-0.5">
+                            <span className="flex items-center gap-1">
+                              <Bot className="w-3 h-3 text-violet-400" />
+                              <span>{caiSummary.authorName}</span>
+                            </span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.2 rounded ${
+                                caiSummary.isFinal
+                                  ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/50'
+                                  : 'bg-amber-950/60 text-amber-400 animate-pulse'
+                              }`}
+                            >
+                              {caiSummary.isFinal ? 'Final Turn' : 'Streaming...'}
+                            </span>
+                          </div>
+                          <div className="text-slate-200 text-[11px] line-clamp-3 leading-relaxed italic">
+                            "{caiSummary.rawContent}"
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Payload Body (Indented JSON) */}
+                      <pre className="whitespace-pre-wrap break-all text-slate-200 text-xs leading-relaxed font-mono mt-1 max-h-64 overflow-y-auto">
+                        {payloadText}
+                      </pre>
+
+                      {/* Raw Hex view if available */}
+                      {ev.rawHex && (
+                        <div className="mt-1.5 pt-1.5 border-t border-slate-800 text-[10px] text-slate-400">
+                          <span className="font-semibold text-slate-500 mr-1">HEX:</span>
+                          {ev.rawHex}
+                        </div>
+                      )}
                     </div>
-
-                    {/* Payload Body */}
-                    <pre className="whitespace-pre-wrap break-all text-slate-200 text-xs leading-relaxed font-mono mt-1">
-                      {payloadText}
-                    </pre>
-
-                    {/* Raw Hex view if available */}
-                    {ev.rawHex && (
-                      <div className="mt-1.5 pt-1.5 border-t border-slate-800 text-[10px] text-slate-400">
-                        <span className="font-semibold text-slate-500 mr-1">HEX:</span>
-                        {ev.rawHex}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
       </div>
 
