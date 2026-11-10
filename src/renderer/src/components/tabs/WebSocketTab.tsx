@@ -92,24 +92,24 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const headers = tab.request.headers || [];
   const queryParams = tab.request.queryParams || [];
 
-  const isCharacterAi = url.toLowerCase().includes('character.ai');
+  const isCharacterAi = (url || '').toLowerCase().includes('character.ai');
   const hasAuthHeader = headers.some(
-    (h) => h.enabled && (h.key.toLowerCase() === 'cookie' || h.key.toLowerCase() === 'authorization')
+    (h) => h.enabled && ((h.key || '').toLowerCase() === 'cookie' || (h.key || '').toLowerCase() === 'authorization')
   );
   const hasMisplacedAuthCookies = headers.some(
-    (h) => h.enabled && (h.key.toUpperCase() === 'HTTP_AUTHORIZATION' || h.key.toUpperCase() === 'GCLB')
+    (h) => h.enabled && ((h.key || '').toUpperCase() === 'HTTP_AUTHORIZATION' || (h.key || '').toUpperCase() === 'GCLB')
   );
 
   const fixAuthHeaders = () => {
-    const gclbHeader = headers.find((h) => h.key.toUpperCase() === 'GCLB');
-    const authCookieHeader = headers.find((h) => h.key.toUpperCase() === 'HTTP_AUTHORIZATION');
+    const gclbHeader = headers.find((h) => (h.key || '').toUpperCase() === 'GCLB');
+    const authCookieHeader = headers.find((h) => (h.key || '').toUpperCase() === 'HTTP_AUTHORIZATION');
 
-    const gclbVal = gclbHeader ? gclbHeader.value.replace(/^"|"$/g, '') : '';
-    const authVal = authCookieHeader ? authCookieHeader.value.replace(/^"|"$/g, '') : '';
+    const gclbVal = gclbHeader ? (gclbHeader.value || '').replace(/^"|"$/g, '') : '';
+    const authVal = authCookieHeader ? (authCookieHeader.value || '').replace(/^"|"$/g, '') : '';
 
     // Remove misplaced headers
     const filtered = headers.filter(
-      (h) => h.key.toUpperCase() !== 'GCLB' && h.key.toUpperCase() !== 'HTTP_AUTHORIZATION'
+      (h) => (h.key || '').toUpperCase() !== 'GCLB' && (h.key || '').toUpperCase() !== 'HTTP_AUTHORIZATION'
     );
 
     // Build Cookie string
@@ -380,6 +380,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             sessionId: tab.id,
             protocol: 'WEBSOCKET',
             direction: 'SYSTEM',
+            type: 'system',
             timestamp: Date.now(),
             payload: `Connected to ${url} [Chromium Native Engine - 100% Genuine Chrome TLS / JA3 Bypass]`,
           });
@@ -392,6 +393,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                   sessionId: tab.id,
                   protocol: 'WEBSOCKET',
                   direction: 'PING',
+                  type: 'ping',
                   timestamp: Date.now(),
                   payload: '{"command":"ping"}',
                 });
@@ -406,6 +408,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             sessionId: tab.id,
             protocol: 'WEBSOCKET',
             direction: 'IN',
+            type: 'message',
             timestamp: Date.now(),
             payload,
           });
@@ -433,6 +436,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             sessionId: tab.id,
             protocol: 'WEBSOCKET',
             direction: 'SYSTEM',
+            type: 'close',
             timestamp: Date.now(),
             payload: `WebSocket closed: code ${e.code}${e.reason ? ` (${e.reason})` : ''}`,
           });
@@ -521,6 +525,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
           sessionId: tab.id,
           protocol: 'WEBSOCKET',
           direction: 'OUT',
+          type: 'message',
           timestamp: Date.now(),
           payload: messageText,
         });
@@ -658,8 +663,9 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const payloadStr = typeof ev.payload === 'object' ? JSON.stringify(ev.payload) : String(ev.payload);
-      return payloadStr.toLowerCase().includes(q) || ev.type.toLowerCase().includes(q);
+      const payloadStr = typeof ev.payload === 'object' ? JSON.stringify(ev.payload) : String(ev.payload || '');
+      const typeStr = ev.type ? String(ev.type).toLowerCase() : '';
+      return payloadStr.toLowerCase().includes(q) || typeStr.includes(q);
     }
     return true;
   });
@@ -1461,7 +1467,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                         )}
                         <span>{ev.direction}</span>
                         <span className="text-[10px] px-1 py-0.2 rounded bg-black/30 font-normal">
-                          {ev.type.toUpperCase()}
+                          {(ev.type || ev.direction || 'EVENT').toUpperCase()}
                         </span>
                         {ev.sizeBytes ? (
                           <span className="text-[10px] text-slate-400">{ev.sizeBytes} B</span>

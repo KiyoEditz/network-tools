@@ -42,7 +42,8 @@ export const SseTab: React.FC<SseTabProps> = ({ tab }) => {
   };
 
   const filteredEvents = (tab.streamEvents || []).filter((ev) => {
-    if (filterEvent && !ev.type.toLowerCase().includes(filterEvent.toLowerCase())) return false;
+    const typeStr = ev.type ? String(ev.type).toLowerCase() : '';
+    if (filterEvent && !typeStr.includes(filterEvent.toLowerCase())) return false;
     if (searchQuery && typeof ev.payload === 'string' && !ev.payload.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });

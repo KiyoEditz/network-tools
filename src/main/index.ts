@@ -46,6 +46,17 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Forbidden Chromium transport headers that must not be overridden in onBeforeSendHeaders
+  // to avoid breaking RFC 6455 handshakes or causing Chromium network service crashes.
+  const FORBIDDEN_ON_BEFORE_SEND = new Set([
+    'host',
+    'connection',
+    'upgrade',
+    'sec-websocket-key',
+    'sec-websocket-version',
+    'sec-websocket-extensions',
+  ]);
+
   // Intercept outgoing Chromium requests (including WebSockets) to inject custom headers (Origin, User-Agent, Cookie)
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     try {
@@ -56,7 +67,9 @@ app.whenReady().then(() => {
         const lowerPattern = pattern.toLowerCase();
         if (host.includes(lowerPattern) || lowerPattern.includes(host)) {
           for (const [k, v] of Object.entries(headers)) {
-            details.requestHeaders[k] = v;
+            if (!FORBIDDEN_ON_BEFORE_SEND.has(k.toLowerCase())) {
+              details.requestHeaders[k] = v;
+            }
           }
         }
       }

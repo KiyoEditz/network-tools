@@ -9,6 +9,7 @@ import { SseTab } from './components/tabs/SseTab.js';
 import { TcpUdpTab } from './components/tabs/TcpUdpTab.js';
 import { MqttTab } from './components/tabs/MqttTab.js';
 import { WebRtcTab } from './components/tabs/WebRtcTab.js';
+import { ErrorBoundary } from './components/common/ErrorBoundary.js';
 import { ProtocolType } from '../../shared/types.js';
 import { Plus, X } from 'lucide-react';
 
@@ -150,16 +151,18 @@ export const App: React.FC = () => {
 
           {/* Active Tab Content Area */}
           <div className="flex-1 overflow-hidden">
-            {activeTab && (
-              <>
-                {activeTab.protocol === 'HTTP' && <HttpTab tab={activeTab} />}
-                {activeTab.protocol === 'WEBSOCKET' && <WebSocketTab tab={activeTab} />}
-                {activeTab.protocol === 'SSE' && <SseTab tab={activeTab} />}
-                {(activeTab.protocol === 'TCP' || activeTab.protocol === 'UDP') && <TcpUdpTab tab={activeTab} />}
-                {activeTab.protocol === 'MQTT' && <MqttTab tab={activeTab} />}
-                {activeTab.protocol === 'WEBRTC' && <WebRtcTab tab={activeTab} />}
-              </>
-            )}
+            <ErrorBoundary fallbackTitle="Terjadi Kesalahan pada Tab Ini">
+              {activeTab && (
+                <>
+                  {activeTab.protocol === 'HTTP' && <HttpTab tab={activeTab} />}
+                  {activeTab.protocol === 'WEBSOCKET' && <WebSocketTab tab={activeTab} />}
+                  {activeTab.protocol === 'SSE' && <SseTab tab={activeTab} />}
+                  {(activeTab.protocol === 'TCP' || activeTab.protocol === 'UDP') && <TcpUdpTab tab={activeTab} />}
+                  {activeTab.protocol === 'MQTT' && <MqttTab tab={activeTab} />}
+                  {activeTab.protocol === 'WEBRTC' && <WebRtcTab tab={activeTab} />}
+                </>
+              )}
+            </ErrorBoundary>
           </div>
         </main>
       </div>
