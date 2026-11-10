@@ -11,7 +11,8 @@ export class AppCookieJar {
 
   public async getCookies(url: string): Promise<CookieRecord[]> {
     try {
-      const cookies = await this.jar.getCookies(url);
+      const normalizedUrl = url.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+      const cookies = await this.jar.getCookies(normalizedUrl);
       return cookies.map((c) => ({
         key: c.key,
         value: c.value,
@@ -29,7 +30,8 @@ export class AppCookieJar {
 
   public async getCookieHeader(url: string): Promise<string> {
     try {
-      return await this.jar.getCookieString(url);
+      const normalizedUrl = url.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+      return await this.jar.getCookieString(normalizedUrl);
     } catch {
       return '';
     }
@@ -107,7 +109,7 @@ export class AppCookieJar {
           const cookie = new Cookie({
             key: name,
             value: value,
-            domain: domain,
+            domain: cleanDomain,
             path: path,
             secure: secure,
             expires: expiresSec > 0 ? new Date(expiresSec * 1000) : undefined,

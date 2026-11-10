@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
+import { buildPreload } from './build-preload.js';
 
 function checkHttp(url) {
   return new Promise((resolve) => {
@@ -60,6 +61,7 @@ async function main() {
     });
   });
   console.log('✅ Main process compiled!');
+  await buildPreload();
 
   console.log('🚀 Starting Vite dev server...');
   const vite = spawn('npx', ['vite', '--host', '127.0.0.1', '--port', '5173'], {

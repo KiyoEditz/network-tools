@@ -1,5 +1,5 @@
 // src/main/ipc/index.ts
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, dialog } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HttpClient } from '../services/http-client.js';
@@ -234,6 +234,36 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return { success: true, count, path: filePath };
     }
     return { success: false, count: 0 };
+  });
+
+  ipcMain.handle('cookies:openFileDialog', async () => {
+    let win = mainWindow;
+    if (!win || win.isDestroyed()) {
+      const all = BrowserWindow.getAllWindows();
+      if (all.length) win = all[0];
+    }
+
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Pilih File Cookies (Netscape / cookies.txt)',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Cookies Text Files (*.txt, *.cookies)', extensions: ['txt', 'cookies', 'netscape', 'tsv'] },
+        { name: 'All Files (*.*)', extensions: ['*'] },
+      ],
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { canceled: true, success: false, count: 0 };
+    }
+
+    const selectedPath = result.filePaths[0];
+    try {
+      const content = fs.readFileSync(selectedPath, 'utf-8');
+      const count = await globalCookieJar.importNetscapeCookies(content);
+      return { canceled: false, success: true, count, path: selectedPath };
+    } catch (err: any) {
+      return { canceled: false, success: false, count: 0, error: err.message };
+    }
   });
 
   ipcMain.handle('cookies:getForUrl', async (_e, { url }) => {

@@ -21,7 +21,7 @@ function createWindow(): void {
     backgroundColor: '#0f172a',
     title: 'Antigravity Network Tester',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,

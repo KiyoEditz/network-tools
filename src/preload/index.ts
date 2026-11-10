@@ -51,6 +51,7 @@ export const electronAPI = {
   clearCookies: () => ipcRenderer.invoke('cookies:clear'),
   importNetscapeCookies: (rawText: string) => ipcRenderer.invoke('cookies:importNetscape', { rawText }),
   loadWorkspaceCookies: () => ipcRenderer.invoke('cookies:loadFromWorkspace'),
+  openCookieFileDialog: () => ipcRenderer.invoke('cookies:openFileDialog'),
   getCookiesForUrl: (url: string) => ipcRenderer.invoke('cookies:getForUrl', { url }),
   getVirtualStorage: () => ipcRenderer.invoke('virtualStorage:getAll'),
   setVirtualStorageItem: (params: any) => ipcRenderer.invoke('virtualStorage:setItem', params),

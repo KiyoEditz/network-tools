@@ -27,6 +27,7 @@ import {
   Shield,
   Lock,
   Cookie as CookieIcon,
+  FolderOpen,
   Cpu,
 } from 'lucide-react';
 
@@ -82,6 +83,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const nativeWsRef = useRef<WebSocket | null>(null);
   const heartbeatTimerRef = useRef<any>(null);
   const [cookieStatus, setCookieStatus] = useState<string | null>(null);
+  const hiddenCookieFileInputRef = useRef<HTMLInputElement>(null);
 
   const timelineEndRef = useRef<HTMLDivElement>(null);
   const isConnected = tab.status === 'connected';
@@ -185,49 +187,141 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
     };
   }, []);
 
-  // One-click loader for cookies.txt
+  // Apply loaded cookies to request headers with domain awareness
+  const applyCookiesToHeaders = async (importedCount: number, sourceName: string) => {
+    try {
+      const targetUrl = url.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+      let cookieHeaderStr = '';
+      if ((window as any).networkAPI?.getCookiesForUrl) {
+        cookieHeaderStr = await (window as any).networkAPI.getCookiesForUrl(targetUrl);
+        if (!cookieHeaderStr && isCharacterAi) {
+          cookieHeaderStr = await (window as any).networkAPI.getCookiesForUrl('https://character.ai/');
+        }
+      }
+
+      const updated = [...headers];
+
+      if (cookieHeaderStr) {
+        const existingIdx = updated.findIndex((h) => h.key.toLowerCase() === 'cookie');
+        if (existingIdx >= 0) {
+          updated[existingIdx].value = cookieHeaderStr;
+          updated[existingIdx].enabled = true;
+        } else {
+          updated.unshift({
+            id: `h-cookie-${Date.now()}`,
+            key: 'Cookie',
+            value: cookieHeaderStr,
+            enabled: true,
+          });
+        }
+
+        // If HTTP_AUTHORIZATION is present in cookies, set Authorization header as well
+        const authMatch = cookieHeaderStr.match(/HTTP_AUTHORIZATION="?(?:Token\s+)?([a-f0-9]+)"?/i);
+        if (authMatch && authMatch[1]) {
+          const authVal = `Token ${authMatch[1]}`;
+          const existingAuth = updated.findIndex((h) => h.key.toLowerCase() === 'authorization');
+          if (existingAuth >= 0) {
+            updated[existingAuth].value = authVal;
+            updated[existingAuth].enabled = true;
+          } else {
+            updated.unshift({
+              id: `h-auth-${Date.now()}`,
+              key: 'Authorization',
+              value: authVal,
+              enabled: true,
+            });
+          }
+        }
+      }
+
+      if (isCharacterAi && !updated.some((h) => h.key.toLowerCase() === 'origin')) {
+        updated.push({
+          id: `h-origin-${Date.now()}`,
+          key: 'Origin',
+          value: 'https://character.ai',
+          enabled: true,
+        });
+      }
+
+      updateTabRequest(tab.id, { headers: updated });
+      setCookieStatus(`Berhasil memuat ${importedCount} cookies dari ${sourceName} & dipasang ke Headers!`);
+      setTimeout(() => setCookieStatus(null), 5000);
+    } catch (err: any) {
+      setCookieStatus('Gagal memasang cookies ke headers: ' + err.message);
+      setTimeout(() => setCookieStatus(null), 5000);
+    }
+  };
+
+  // One-click loader for cookies.txt (checks workspace root or opens Explorer fallback)
   const handleLoadWorkspaceCookies = async () => {
     try {
       if ((window as any).networkAPI?.loadWorkspaceCookies) {
         const res = await (window as any).networkAPI.loadWorkspaceCookies();
-        if (res.success) {
-          const cookieHeaderStr = await (window as any).networkAPI.getCookiesForUrl(url || 'https://character.ai');
-
-          const updated = [...headers];
-          const existingIdx = updated.findIndex((h) => h.key.toLowerCase() === 'cookie');
-          if (existingIdx >= 0) {
-            updated[existingIdx].value = cookieHeaderStr;
-            updated[existingIdx].enabled = true;
-          } else {
-            updated.unshift({
-              id: `h-cookie-${Date.now()}`,
-              key: 'Cookie',
-              value: cookieHeaderStr,
-              enabled: true,
-            });
-          }
-
-          if (!updated.some((h) => h.key.toLowerCase() === 'origin')) {
-            updated.push({
-              id: `h-origin-${Date.now()}`,
-              key: 'Origin',
-              value: 'https://character.ai',
-              enabled: true,
-            });
-          }
-
-          updateTabRequest(tab.id, { headers: updated });
-          setCookieStatus(`Berhasil memuat ${res.count} cookies dari cookies.txt!`);
-          setTimeout(() => setCookieStatus(null), 4000);
-        } else {
-          setCookieStatus('File cookies.txt tidak ditemukan di workspace root.');
-          setTimeout(() => setCookieStatus(null), 4000);
+        if (res && res.success) {
+          await applyCookiesToHeaders(res.count, 'cookies.txt (Workspace)');
+          return;
         }
       }
+      // If file not in workspace root, open native file explorer
+      await handleOpenFileExplorer();
     } catch (err: any) {
       setCookieStatus('Gagal memuat cookies: ' + err.message);
-      setTimeout(() => setCookieStatus(null), 4000);
+      setTimeout(() => setCookieStatus(null), 5000);
     }
+  };
+
+  // Open Windows Explorer to pick any cookie file
+  const handleOpenFileExplorer = async () => {
+    try {
+      if ((window as any).networkAPI?.openCookieFileDialog) {
+        const res = await (window as any).networkAPI.openCookieFileDialog();
+        if (res && res.success) {
+          const fileName = res.path ? res.path.split(/[/\\]/).pop() : 'file cookies';
+          await applyCookiesToHeaders(res.count, fileName);
+          return;
+        } else if (res && res.canceled) {
+          return;
+        }
+      }
+      // Fallback: trigger hidden HTML input
+      hiddenCookieFileInputRef.current?.click();
+    } catch (err: any) {
+      setCookieStatus('Gagal membuka file dialog: ' + err.message);
+      setTimeout(() => setCookieStatus(null), 5000);
+    }
+  };
+
+  const handleHiddenFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target?.result as string;
+      if (text && (window as any).networkAPI?.importNetscapeCookies) {
+        const count = await (window as any).networkAPI.importNetscapeCookies(text);
+        await applyCookiesToHeaders(count || 0, file.name);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // Manual Add Cookie Header
+  const handleAddManualCookieHeader = () => {
+    const updated = [...headers];
+    const existing = updated.find((h) => h.key.toLowerCase() === 'cookie');
+    if (existing) {
+      existing.enabled = true;
+    } else {
+      updated.unshift({
+        id: `h-cookie-${Date.now()}`,
+        key: 'Cookie',
+        value: '',
+        enabled: true,
+      });
+    }
+    updateTabRequest(tab.id, { headers: updated });
+    setSubTab('headers');
   };
 
   // Connect / Disconnect Handler
@@ -572,6 +666,15 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
 
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-900 overflow-hidden text-xs select-none">
+      {/* Hidden file input for file picker fallback */}
+      <input
+        ref={hiddenCookieFileInputRef}
+        type="file"
+        accept=".txt,.cookies,.tsv"
+        className="hidden"
+        onChange={handleHiddenFileInput}
+      />
+
       {/* ================= TOP CONNECTION BAR ================= */}
       <div className="p-3 bg-slate-900/95 border-b border-slate-800 flex items-center gap-2.5 shadow-sm">
         {/* Protocol Badge */}
@@ -636,6 +739,17 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
         >
           <CookieIcon className="w-3.5 h-3.5 text-amber-400" />
           <span className="font-medium hidden lg:inline">Cookies.txt</span>
+        </button>
+
+        {/* Windows Explorer File Picker */}
+        <button
+          onClick={handleOpenFileExplorer}
+          disabled={isConnected}
+          className="flex items-center gap-1.5 px-3 py-2 rounded bg-slate-800 hover:bg-slate-700/80 text-amber-300 border border-amber-600/30 transition disabled:opacity-40 cursor-pointer"
+          title="Buka Windows Explorer untuk memilih file cookies (.txt / .cookies)"
+        >
+          <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+          <span className="font-medium hidden xl:inline">Pilih Cookies</span>
         </button>
 
         {/* Connect / Disconnect Action Button */}
@@ -753,6 +867,19 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                           className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[11px] cursor-pointer flex items-center gap-1 shadow"
                         >
                           <CookieIcon className="w-3.5 h-3.5" /> Pasang Cookies dari cookies.txt
+                        </button>
+                        <button
+                          onClick={handleOpenFileExplorer}
+                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 font-medium text-[11px] cursor-pointer flex items-center gap-1 shadow"
+                          title="Pilih file cookies dari Windows Explorer"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5" /> Buka Explorer (Pilih File)
+                        </button>
+                        <button
+                          onClick={handleAddManualCookieHeader}
+                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 font-medium text-[11px] cursor-pointer flex items-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Tambahkan Cookie di Header
                         </button>
                         <button
                           onClick={() => setSubTab('options')}
