@@ -26,6 +26,8 @@ import {
   AlertCircle,
   Shield,
   Lock,
+  Cookie as CookieIcon,
+  Cpu,
 } from 'lucide-react';
 
 interface WebSocketTabProps {
@@ -74,6 +76,12 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const [customSigalgs, setCustomSigalgs] = useState('');
   const [customCurves, setCustomCurves] = useState('X25519:P-256:P-384');
   const [rejectUnauthorized, setRejectUnauthorized] = useState(false);
+
+  // Engine selection: 'chromium' (Browser TLS / BoringSSL) or 'node' (Node.js OpenSSL)
+  const [wsEngine, setWsEngine] = useState<'chromium' | 'node'>('chromium');
+  const nativeWsRef = useRef<WebSocket | null>(null);
+  const heartbeatTimerRef = useRef<any>(null);
+  const [cookieStatus, setCookieStatus] = useState<string | null>(null);
 
   const timelineEndRef = useRef<HTMLDivElement>(null);
   const isConnected = tab.status === 'connected';
@@ -169,9 +177,70 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
     }
   }, [rawText]);
 
+  // Cleanup native WebSocket and heartbeat on unmount
+  useEffect(() => {
+    return () => {
+      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+      if (nativeWsRef.current) nativeWsRef.current.close();
+    };
+  }, []);
+
+  // One-click loader for cookies.txt
+  const handleLoadWorkspaceCookies = async () => {
+    try {
+      if ((window as any).networkAPI?.loadWorkspaceCookies) {
+        const res = await (window as any).networkAPI.loadWorkspaceCookies();
+        if (res.success) {
+          const cookieHeaderStr = await (window as any).networkAPI.getCookiesForUrl(url || 'https://character.ai');
+
+          const updated = [...headers];
+          const existingIdx = updated.findIndex((h) => h.key.toLowerCase() === 'cookie');
+          if (existingIdx >= 0) {
+            updated[existingIdx].value = cookieHeaderStr;
+            updated[existingIdx].enabled = true;
+          } else {
+            updated.unshift({
+              id: `h-cookie-${Date.now()}`,
+              key: 'Cookie',
+              value: cookieHeaderStr,
+              enabled: true,
+            });
+          }
+
+          if (!updated.some((h) => h.key.toLowerCase() === 'origin')) {
+            updated.push({
+              id: `h-origin-${Date.now()}`,
+              key: 'Origin',
+              value: 'https://character.ai',
+              enabled: true,
+            });
+          }
+
+          updateTabRequest(tab.id, { headers: updated });
+          setCookieStatus(`Berhasil memuat ${res.count} cookies dari cookies.txt!`);
+          setTimeout(() => setCookieStatus(null), 4000);
+        } else {
+          setCookieStatus('File cookies.txt tidak ditemukan di workspace root.');
+          setTimeout(() => setCookieStatus(null), 4000);
+        }
+      }
+    } catch (err: any) {
+      setCookieStatus('Gagal memuat cookies: ' + err.message);
+      setTimeout(() => setCookieStatus(null), 4000);
+    }
+  };
+
   // Connect / Disconnect Handler
   const handleToggleConnect = async () => {
     if (isConnected || tab.status === 'loading') {
+      if (heartbeatTimerRef.current) {
+        clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
+      }
+      if (nativeWsRef.current) {
+        nativeWsRef.current.close(1000, 'User disconnected');
+        nativeWsRef.current = null;
+      }
       if ((window as any).networkAPI) {
         await (window as any).networkAPI.disconnectWs(tab.id);
       }
@@ -179,6 +248,123 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
       return;
     }
 
+    updateTabState(tab.id, { status: 'loading' });
+
+    // 1. CHROMIUM NATIVE ENGINE (BoringSSL Genuine Chrome TLS / JA3 Match)
+    if (wsEngine === 'chromium') {
+      try {
+        const headersObj: Record<string, string> = {};
+        headers.forEach((h) => {
+          if (h.enabled && h.key.trim()) {
+            headersObj[h.key.trim()] = h.value;
+          }
+        });
+
+        let domain = 'character.ai';
+        try {
+          const u = new URL(url);
+          domain = u.hostname;
+        } catch {
+          // fallback
+        }
+
+        if ((window as any).networkAPI?.registerChromiumHeaders) {
+          await (window as any).networkAPI.registerChromiumHeaders(domain, headersObj);
+        }
+
+        const subprotocols = subprotocolsInput
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        const ws = new WebSocket(url, subprotocols.length ? subprotocols : undefined);
+        nativeWsRef.current = ws;
+
+        ws.onopen = () => {
+          updateTabState(tab.id, { status: 'connected' });
+          useAppStore.getState().appendStreamEvent(tab.id, {
+            sessionId: tab.id,
+            protocol: 'WEBSOCKET',
+            direction: 'SYSTEM',
+            timestamp: Date.now(),
+            payload: `Connected to ${url} [Chromium Native Engine - 100% Genuine Chrome TLS / JA3 Bypass]`,
+          });
+
+          if (heartbeat) {
+            heartbeatTimerRef.current = setInterval(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ command: 'ping' }));
+                useAppStore.getState().appendStreamEvent(tab.id, {
+                  sessionId: tab.id,
+                  protocol: 'WEBSOCKET',
+                  direction: 'PING',
+                  timestamp: Date.now(),
+                  payload: '{"command":"ping"}',
+                });
+              }
+            }, heartbeatInterval * 1000);
+          }
+        };
+
+        ws.onmessage = (event) => {
+          const payload = typeof event.data === 'string' ? event.data : '[Binary Frame]';
+          useAppStore.getState().appendStreamEvent(tab.id, {
+            sessionId: tab.id,
+            protocol: 'WEBSOCKET',
+            direction: 'IN',
+            timestamp: Date.now(),
+            payload,
+          });
+        };
+
+        ws.onerror = () => {
+          useAppStore.getState().appendStreamEvent(tab.id, {
+            sessionId: tab.id,
+            protocol: 'WEBSOCKET',
+            direction: 'SYSTEM',
+            type: 'error',
+            timestamp: Date.now(),
+            payload: 'WebSocket error occurred in Chromium engine. Pastikan URL dan cookies valid.',
+          });
+        };
+
+        ws.onclose = (e) => {
+          if (heartbeatTimerRef.current) {
+            clearInterval(heartbeatTimerRef.current);
+            heartbeatTimerRef.current = null;
+          }
+          nativeWsRef.current = null;
+          updateTabState(tab.id, { status: 'idle' });
+          useAppStore.getState().appendStreamEvent(tab.id, {
+            sessionId: tab.id,
+            protocol: 'WEBSOCKET',
+            direction: 'SYSTEM',
+            timestamp: Date.now(),
+            payload: `WebSocket closed: code ${e.code}${e.reason ? ` (${e.reason})` : ''}`,
+          });
+        };
+
+        setTimeout(() => {
+          const curTab = useAppStore.getState().tabs.find((t) => t.id === tab.id);
+          if (curTab && curTab.status === 'loading') {
+            updateTabState(tab.id, { status: 'error' });
+            useAppStore.getState().appendStreamEvent(tab.id, {
+              sessionId: tab.id,
+              protocol: 'WEBSOCKET',
+              direction: 'SYSTEM',
+              timestamp: Date.now(),
+              type: 'error',
+              payload: 'Handshake timeout (Chromium). Silakan periksa kembali URL atau cookie.',
+            });
+          }
+        }, 8000);
+      } catch (err: any) {
+        updateTabState(tab.id, { status: 'error' });
+      }
+      return;
+    }
+
+    // 2. NODE.JS ENGINE
     updateTabState(tab.id, { status: 'loading' });
     try {
       if ((window as any).networkAPI) {
@@ -222,7 +408,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
               direction: 'SYSTEM',
               timestamp: Date.now(),
               type: 'error',
-              payload: 'Handshake timeout: Server tidak merespon upgrade. Pastikan autentikasi Character.AI (Cookie/Authorization) sudah diisi.',
+              payload: 'Handshake timeout: Server tidak merespon upgrade. Disarankan gunakan Chromium Native Engine.',
             });
           }
         }, 8000);
@@ -235,7 +421,16 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
   const handleSendMessage = async () => {
     if (!isConnected || !messageText.trim()) return;
     try {
-      if ((window as any).networkAPI) {
+      if (wsEngine === 'chromium' && nativeWsRef.current?.readyState === WebSocket.OPEN) {
+        nativeWsRef.current.send(messageText);
+        useAppStore.getState().appendStreamEvent(tab.id, {
+          sessionId: tab.id,
+          protocol: 'WEBSOCKET',
+          direction: 'OUT',
+          timestamp: Date.now(),
+          payload: messageText,
+        });
+      } else if ((window as any).networkAPI) {
         await (window as any).networkAPI.sendWs({
           sessionId: tab.id,
           payload: messageText,
@@ -432,6 +627,17 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
           <span className="font-medium hidden md:inline">Character.AI</span>
         </button>
 
+        {/* Quick Cookies.txt loader button */}
+        <button
+          onClick={handleLoadWorkspaceCookies}
+          disabled={isConnected}
+          className="flex items-center gap-1.5 px-3 py-2 rounded bg-amber-950/50 hover:bg-amber-900/60 text-amber-300 border border-amber-600/40 transition disabled:opacity-40 cursor-pointer"
+          title="Muat cookies dari cookies.txt di workspace"
+        >
+          <CookieIcon className="w-3.5 h-3.5 text-amber-400" />
+          <span className="font-medium hidden lg:inline">Cookies.txt</span>
+        </button>
+
         {/* Connect / Disconnect Action Button */}
         <button
           onClick={handleToggleConnect}
@@ -493,7 +699,7 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                 <Sliders className="w-3 h-3" />
                 <span>Options</span>
                 <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-cyan-950/80 text-cyan-400 border border-cyan-800/60 uppercase">
-                  TLS: {tlsPreset}
+                  {wsEngine === 'chromium' ? 'Chromium TLS' : `Node: ${tlsPreset}`}
                 </span>
               </button>
             </div>
@@ -524,6 +730,14 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             {/* 1. HEADERS SUB-TAB */}
             {subTab === 'headers' && (
               <div className="space-y-2.5">
+                {/* Cookie Import Status Toast */}
+                {cookieStatus && (
+                  <div className="p-2.5 rounded bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-xs flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="font-medium">{cookieStatus}</span>
+                  </div>
+                )}
+
                 {/* Character.AI Cloudflare / TLS Fingerprint Notice */}
                 {isCharacterAi && (
                   <div className="p-2.5 rounded bg-sky-950/40 border border-sky-500/50 text-sky-200 text-[11px] leading-relaxed flex items-start gap-2">
@@ -531,14 +745,20 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
                     <div className="flex-1">
                       <strong className="text-sky-300">Cloudflare Bot Management &amp; TLS Fingerprinting:</strong>
                       <p className="mt-0.5 text-slate-300">
-                        Endpoint <code>neo.character.ai</code> memeriksa <strong>TLS Fingerprint (JA3 / JA4)</strong>. Engine Network Tester telah mengaktifkan profil TLS Mimic <strong>Chrome 120+</strong> (Ciphers &amp; Curves) secara otomatis.
+                        Endpoint <code>neo.character.ai</code> memeriksa <strong>TLS Fingerprint (JA3 / JA4)</strong> dan token sesi. Engine <strong>Chromium Native</strong> aktif otomatis untuk melewati proteksi bot Cloudflare.
                       </p>
-                      <div className="mt-2 flex items-center gap-2">
+                      <div className="mt-2 flex items-center gap-2 flex-wrap">
+                        <button
+                          onClick={handleLoadWorkspaceCookies}
+                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[11px] cursor-pointer flex items-center gap-1 shadow"
+                        >
+                          <CookieIcon className="w-3.5 h-3.5" /> Pasang Cookies dari cookies.txt
+                        </button>
                         <button
                           onClick={() => setSubTab('options')}
-                          className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white font-medium text-[11px] cursor-pointer flex items-center gap-1 shadow"
+                          className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-medium text-[11px] cursor-pointer flex items-center gap-1"
                         >
-                          <Sliders className="w-3.5 h-3.5" /> Atur TLS Fingerprint (JA3/JA4) di Options
+                          <Sliders className="w-3.5 h-3.5" /> Engine &amp; TLS Options
                         </button>
                       </div>
                     </div>
@@ -698,6 +918,57 @@ export const WebSocketTab: React.FC<WebSocketTabProps> = ({ tab }) => {
             {/* 3. OPTIONS SUB-TAB */}
             {subTab === 'options' && (
               <div className="space-y-4">
+                {/* WebSocket Engine Selection */}
+                <div className="p-3 bg-slate-800/50 rounded border border-indigo-500/40 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Cpu className="w-4 h-4 text-indigo-400" />
+                      <span className="font-semibold text-slate-200">WebSocket Engine Architecture</span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-700 font-mono font-medium">
+                      {wsEngine === 'chromium' ? 'Chromium Native' : 'Node.js Backend'}
+                    </span>
+                  </div>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">
+                    Pilih engine koneksi WebSocket yang digunakan. Chromium Native direkomendasikan untuk target yang diproteksi bot Cloudflare.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div
+                      onClick={() => !isConnected && setWsEngine('chromium')}
+                      className={`p-2.5 rounded border cursor-pointer transition ${
+                        wsEngine === 'chromium'
+                          ? 'bg-indigo-950/70 border-indigo-500 text-indigo-200 shadow-sm'
+                          : 'bg-slate-900 border-slate-700/60 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between font-semibold text-xs">
+                        <span>Chromium Native (Browser TLS)</span>
+                        {wsEngine === 'chromium' && <Check className="w-3.5 h-3.5 text-indigo-400" />}
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-400 leading-normal">
+                        BoringSSL stack 100% identik dengan Google Chrome. Melewati Cloudflare Bot Management &amp; deteksi JA3/JA4.
+                      </p>
+                    </div>
+
+                    <div
+                      onClick={() => !isConnected && setWsEngine('node')}
+                      className={`p-2.5 rounded border cursor-pointer transition ${
+                        wsEngine === 'node'
+                          ? 'bg-indigo-950/70 border-indigo-500 text-indigo-200 shadow-sm'
+                          : 'bg-slate-900 border-slate-700/60 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between font-semibold text-xs">
+                        <span>Node.js Backend (OpenSSL)</span>
+                        {wsEngine === 'node' && <Check className="w-3.5 h-3.5 text-indigo-400" />}
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-400 leading-normal">
+                        Engine Node.js murni dengan konfigurasi cipher suite dan TLS preset manual. Cocok untuk server lokal atau RFC testing.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 {/* TLS Fingerprinting (JA3 / JA4 Mimic) */}
                 <div className="p-3 bg-slate-800/50 rounded border border-cyan-500/30 space-y-3">
                   <div className="flex items-center justify-between">

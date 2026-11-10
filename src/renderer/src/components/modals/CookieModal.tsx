@@ -1,7 +1,7 @@
 // src/renderer/src/components/modals/CookieModal.tsx
 import React, { useState, useEffect } from 'react';
 import { CookieRecord } from '../../../../shared/types.js';
-import { X, Trash2, Cookie as CookieIcon, RefreshCw } from 'lucide-react';
+import { X, Trash2, Cookie as CookieIcon, RefreshCw, Upload, FileText, CheckCircle2 } from 'lucide-react';
 
 interface CookieModalProps {
   isOpen: boolean;
@@ -11,6 +11,7 @@ interface CookieModalProps {
 export const CookieModal: React.FC<CookieModalProps> = ({ isOpen, onClose }) => {
   const [cookies, setCookies] = useState<CookieRecord[]>([]);
   const [loading, setLoading] = useState(false);
+  const [importedStatus, setImportedStatus] = useState<string | null>(null);
 
   const fetchCookies = async () => {
     setLoading(true);
@@ -32,6 +33,27 @@ export const CookieModal: React.FC<CookieModalProps> = ({ isOpen, onClose }) => 
     if ((window as any).networkAPI) {
       await (window as any).networkAPI.clearCookies();
       setCookies([]);
+    }
+  };
+
+  const handleLoadWorkspaceCookies = async () => {
+    if ((window as any).networkAPI?.loadWorkspaceCookies) {
+      setLoading(true);
+      try {
+        const res = await (window as any).networkAPI.loadWorkspaceCookies();
+        if (res.success) {
+          setImportedStatus(`Berhasil memuat ${res.count} cookies dari cookies.txt!`);
+          await fetchCookies();
+          setTimeout(() => setImportedStatus(null), 4000);
+        } else {
+          setImportedStatus('File cookies.txt tidak ditemukan di workspace.');
+          setTimeout(() => setImportedStatus(null), 4000);
+        }
+      } catch (err: any) {
+        setImportedStatus('Gagal memuat cookies: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -59,6 +81,14 @@ export const CookieModal: React.FC<CookieModalProps> = ({ isOpen, onClose }) => 
             </button>
           </div>
         </div>
+
+        {/* Status Notification */}
+        {importedStatus && (
+          <div className="px-4 py-2 bg-emerald-950/80 border-b border-emerald-600/50 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{importedStatus}</span>
+          </div>
+        )}
 
         {/* Content Table */}
         <div className="flex-1 overflow-auto p-4 bg-slate-950 text-xs">
@@ -101,7 +131,17 @@ export const CookieModal: React.FC<CookieModalProps> = ({ isOpen, onClose }) => 
 
         {/* Footer */}
         <div className="p-3 bg-slate-800/80 border-t border-slate-700 flex justify-between items-center text-xs">
-          <span className="text-slate-400">Total Cookies: <strong>{cookies.length}</strong></span>
+          <div className="flex items-center gap-3">
+            <span className="text-slate-400">Total Cookies: <strong>{cookies.length}</strong></span>
+            <button
+              onClick={handleLoadWorkspaceCookies}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-amber-600/30 text-amber-300 hover:bg-amber-600/50 cursor-pointer border border-amber-500/30"
+              title="Baca cookies.txt dari root workspace dan simpan ke Cookie Jar"
+            >
+              <FileText className="w-3.5 h-3.5" /> Muat dari cookies.txt
+            </button>
+          </div>
           <div className="flex gap-2">
             {cookies.length > 0 && (
               <button

@@ -81,6 +81,51 @@ export class AppCookieJar {
   public async clearCookies(): Promise<void> {
     await this.jar.removeAllCookies();
   }
+
+  public async importNetscapeCookies(rawText: string): Promise<number> {
+    const lines = rawText.split('\n');
+    let imported = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const parts = trimmed.split('\t');
+      if (parts.length >= 7) {
+        const domain = parts[0];
+        const path = parts[2] || '/';
+        const secure = parts[3] === 'TRUE';
+        const expiresSec = parseInt(parts[4], 10);
+        const name = parts[5];
+        const value = parts[6];
+
+        if (!name) continue;
+
+        const cleanDomain = domain.startsWith('.') ? domain.slice(1) : domain;
+        const protocol = secure ? 'https://' : 'http://';
+        const cookieUrl = `${protocol}${cleanDomain}${path}`;
+
+        try {
+          const cookie = new Cookie({
+            key: name,
+            value: value,
+            domain: domain,
+            path: path,
+            secure: secure,
+            expires: expiresSec > 0 ? new Date(expiresSec * 1000) : undefined,
+          });
+          await this.jar.setCookie(cookie, cookieUrl);
+          imported++;
+        } catch {
+          // ignore parsing error for malformed lines
+        }
+      }
+    }
+    return imported;
+  }
+
+  public async getCookieHeaderForDomain(domain: string): Promise<string> {
+    const clean = domain.startsWith('.') ? domain.slice(1) : domain;
+    return await this.getCookieHeader(`https://${clean}/`);
+  }
 }
 
 export const globalCookieJar = new AppCookieJar();

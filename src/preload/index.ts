@@ -49,9 +49,18 @@ export const electronAPI = {
   // Cookies & Virtual Storage
   getAllCookies: () => ipcRenderer.invoke('cookies:getAll'),
   clearCookies: () => ipcRenderer.invoke('cookies:clear'),
+  importNetscapeCookies: (rawText: string) => ipcRenderer.invoke('cookies:importNetscape', { rawText }),
+  loadWorkspaceCookies: () => ipcRenderer.invoke('cookies:loadFromWorkspace'),
+  getCookiesForUrl: (url: string) => ipcRenderer.invoke('cookies:getForUrl', { url }),
   getVirtualStorage: () => ipcRenderer.invoke('virtualStorage:getAll'),
   setVirtualStorageItem: (params: any) => ipcRenderer.invoke('virtualStorage:setItem', params),
   clearVirtualStorage: (params: any) => ipcRenderer.invoke('virtualStorage:clear', params),
+
+  // Chromium Headers for WebSocket
+  registerChromiumHeaders: (domain: string, headers: Record<string, string>) =>
+    ipcRenderer.invoke('ws:registerChromiumHeaders', { domain, headers }),
+  clearChromiumHeaders: (domain: string) =>
+    ipcRenderer.invoke('ws:clearChromiumHeaders', { domain }),
 
   // Real-time Event Stream Listener
   onStreamEvent: (callback: (event: StreamEvent) => void) => {

@@ -1,5 +1,7 @@
 // src/main/ipc/index.ts
 import { ipcMain, BrowserWindow } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
 import { HttpClient } from '../services/http-client.js';
 import { globalWsSseEngine } from '../services/ws-sse-engine.js';
 import { globalSocketEngine } from '../services/socket-engine.js';
@@ -11,6 +13,7 @@ import { ProxyManager } from '../services/proxy-manager.js';
 import { NetworkInterfaceService } from '../services/network-interface.js';
 import { VariableEngine } from '../services/variable-engine.js';
 import { HttpRequestPayload, StreamEvent } from '../../shared/types.js';
+import { customChromiumHeaders } from '../index.js';
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   const emitStreamEvent = (event: StreamEvent) => {
@@ -205,5 +208,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('virtualStorage:clear', async (_e, { origin, type }) => {
     globalVirtualStorage.clear(origin, type);
     return { success: true };
+  });
+
+  // =================== CHROMIUM HEADERS & WORKSPACE COOKIES ===================
+  ipcMain.handle('ws:registerChromiumHeaders', async (_e, { domain, headers }) => {
+    customChromiumHeaders.set(domain, headers);
+    return { success: true };
+  });
+
+  ipcMain.handle('ws:clearChromiumHeaders', async (_e, { domain }) => {
+    customChromiumHeaders.delete(domain);
+    return { success: true };
+  });
+
+  ipcMain.handle('cookies:importNetscape', async (_e, { rawText }) => {
+    const count = await globalCookieJar.importNetscapeCookies(rawText);
+    return { success: true, count };
+  });
+
+  ipcMain.handle('cookies:loadFromWorkspace', async () => {
+    const filePath = path.resolve(process.cwd(), 'cookies.txt');
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const count = await globalCookieJar.importNetscapeCookies(content);
+      return { success: true, count, path: filePath };
+    }
+    return { success: false, count: 0 };
+  });
+
+  ipcMain.handle('cookies:getForUrl', async (_e, { url }) => {
+    return await globalCookieJar.getCookieHeader(url);
   });
 }
